@@ -6,6 +6,8 @@ rust-version = "1.74"
 description = "Tokito native desktop app (egui)"
 license = "MIT OR Apache-2.0"
 readme = "../README.md"
+repository = "https://github.com/Afnanksalal/tokito"
+homepage = "https://github.com/Afnanksalal/tokito"
 
 [dependencies]
 anyhow = "1"

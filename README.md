@@ -2,9 +2,7 @@
 
 **Grounded hardware design, not prompt fiction.** Tokito is a **desktop studio** and **HTTP API** for **parts**, **BOMs**, and **schematics**—with an AI copilot that **searches the web**, **fills your parts database**, and **places real catalog parts** on the canvas before it drafts connectivity.
 
-[![CI](https://github.com/YOUR_ORG/tokito/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_ORG/tokito/actions/workflows/ci.yml)
-
-Replace `YOUR_ORG/tokito` in the badge URL after you publish the repo.
+[![CI](https://github.com/Afnanksalal/tokito/actions/workflows/ci.yml/badge.svg)](https://github.com/Afnanksalal/tokito/actions/workflows/ci.yml)
 
 ---
 

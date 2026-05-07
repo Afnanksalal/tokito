@@ -4,9 +4,7 @@ use crate::error::{AppError, AppResult};
 use crate::router::AppState;
 use crate::services::firecrawl;
 use crate::store::account;
-use crate::store::research::{
-    self, KIND_FIRECRAWL_SCRAPE, KIND_FIRECRAWL_SEARCH,
-};
+use crate::store::research::{self, KIND_FIRECRAWL_SCRAPE, KIND_FIRECRAWL_SEARCH};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
