@@ -1,21 +1,31 @@
 # Security policy
 
-## Supported versions
+## Supported releases
 
-Security fixes are applied to the default branch (`main` or `master`) going forward. There are no separate long-term support releases yet for Tokito **0.1.x**.
+Security fixes land on the **default branch** (`main` / `master`). Tokito **0.1.x** does not have separate long-term support branches yet.
+
+---
 
 ## Reporting a vulnerability
 
-Please **do not** open a public GitHub issue for undisclosed security vulnerabilities.
+**Please do not** open a **public** issue for an undisclosed security bug.
 
-- Prefer **private vulnerability reporting** via GitHub (“Security” → “Report a vulnerability”) if enabled for this repository.
-- Otherwise, contact the maintainers with a clear subject line (e.g. “Security: Tokito …”) and enough detail to reproduce or assess impact.
+1. Use GitHub **private vulnerability reporting** if it is enabled for this repository (**Security → Report a vulnerability**).
+2. Otherwise, contact the maintainers privately with a subject line such as `Security: Tokito <short summary>`.
 
-Include: affected component (API, native app, auth), version/commit, and steps or proof-of-concept if safe to share.
+Include:
 
-We aim to acknowledge reasonable reports within a few business days and coordinate disclosure after a fix is available.
+- **Affected surface** — HTTP API, native app, auth, integrations, etc.
+- **Version or commit** you tested.
+- **Steps to reproduce** or a minimal proof of concept, if it can be shared safely.
 
-## Scope notes
+We aim to acknowledge valid reports within a **few business days** and coordinate disclosure after a fix is available.
 
-- Tokito stores **design data** and may integrate **third-party APIs** (xAI, Firecrawl, distributors). Misconfiguration (exposed `.env`, weak `TOKITO_JWT_SECRET`) is an operational risk—rotate secrets and use TLS in production.
-- Dependency advisories: run `cargo audit` (or GitHub Dependabot) as part of your own supply-chain review.
+---
+
+## Scope & expectations
+
+- Tokito stores **design and catalog data** and may call **third-party APIs** (xAI, Firecrawl, distributors). **Operational security matters**: protect **`TOKITO_JWT_SECRET`**, database credentials, and API keys; use **TLS** in production; restrict network access to Postgres.
+- **Supply chain**: run **`cargo audit`** or enable **Dependabot** in your fork/org as part of your own review process.
+
+Thank you for helping keep users safe.

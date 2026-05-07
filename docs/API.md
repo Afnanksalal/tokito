@@ -1,12 +1,30 @@
-# Tokito HTTP API (MVP)
+# HTTP API reference
 
-Base URL: `http://localhost:8080` (or your deployment). JSON bodies use `Content-Type: application/json`.
+Tokito exposes a **versioned JSON API** under **`/v1`**, plus **`GET /health`**. All request bodies are **`application/json`** unless stated otherwise.
+
+**Typical base URL (local):** `http://localhost:8080`
+
+---
+
+## Authentication
+
+Protected routes require a **Bearer JWT** obtained via **`POST /v1/login`** (after **`POST /v1/register`**). Send:
+
+```http
+Authorization: Bearer <token>
+```
+
+Integration keys and auth flows are implemented in `src/handlers/` under auth routes; the **native desktop** path uses a simplified local user for development convenience.
+
+---
 
 ## Health
 
 ### `GET /health`
 
-Returns:
+Liveness probe. **No auth.**
+
+**200** body:
 
 ```json
 { "status": "ok", "service": "tokito" }
@@ -18,13 +36,17 @@ Returns:
 
 ### `POST /v1/manufacturers`
 
+Create a manufacturer.
+
 ```json
 { "name": "STMicroelectronics", "slug": null }
 ```
 
-`slug` is optional; if omitted, a slug is generated from `name`.
+`slug` is optional; when omitted it is derived from `name`.
 
 ### `GET /v1/manufacturers?limit=100`
+
+List manufacturers (newest / ordering as implemented in store).
 
 ---
 
@@ -44,9 +66,11 @@ Returns:
 
 ### `GET /v1/parts?q=stm&limit=50`
 
-`q` optional; if empty, returns up to `limit` parts ordered by MPN.
+Search by MPN/description fragment. If `q` is empty, returns up to `limit` parts ordered by MPN.
 
 ### `GET /v1/parts/:id`
+
+Fetch a single part by UUID.
 
 ---
 
@@ -58,25 +82,21 @@ Returns:
 { "name": "Sensor board", "description": "Rev A" }
 ```
 
-### `GET /v1/designs/:id`
+### `GET /v1/designs/:id` · `PATCH /v1/designs/:id`
 
-### `PATCH /v1/designs/:id`
+Metadata read/update.
 
 ```json
 { "name": "Sensor board rev B", "description": null }
 ```
 
-### `GET /v1/designs/:id/export?format=json`
+### `GET /v1/designs/:id/export`
 
-Default snapshot JSON (`design`, `bom`, `schematic`, `intent`, `research_artifacts`).
-
-### `GET /v1/designs/:id/export?format=csv`
-
-BOM-only CSV download.
-
-### `GET /v1/designs/:id/export?format=netlist`
-
-Plain-text connectivity listing (`NET  REFDES.PIN`), derived from stored schematic pins.
+| Query | Result |
+|-------|--------|
+| `?format=json` (default) | Snapshot: `design`, `bom`, `schematic`, `intent`, `research_artifacts` |
+| `?format=csv` | BOM CSV download |
+| `?format=netlist` | Plain-text connectivity (`NET  REFDES.PIN` style) |
 
 ---
 
@@ -86,7 +106,7 @@ Plain-text connectivity listing (`NET  REFDES.PIN`), derived from stored schemat
 
 ### `PUT /v1/designs/:id/bom`
 
-Replaces the entire BOM for the design.
+Full replace of BOM lines.
 
 ```json
 {
@@ -97,41 +117,19 @@ Replaces the entire BOM for the design.
 }
 ```
 
-`quantity` must be \> 0. All `part_id` values must exist.
+Rules: `quantity` > 0; every `part_id` must exist in **`parts`**.
 
 ---
 
-## Schematic
+## Schematic graph
 
 ### `GET /v1/designs/:id/schematic`
 
-Returns:
-
-```json
-{
-  "instances": [
-    {
-      "id": "...",
-      "design_id": "...",
-      "part_id": null,
-      "ref_des": "U1",
-      "pos_x": 10,
-      "pos_y": 20,
-      "rotation": 0,
-      "meta": {},
-      "created_at": "..."
-    }
-  ],
-  "nets": [{ "id": "...", "design_id": "...", "name": "VCC", "created_at": "..." }],
-  "pins": [
-    { "id": "...", "instance_id": "...", "pin_name": "1", "net_id": "...", "created_at": "..." }
-  ]
-}
-```
+Returns stored instances, nets, and pins (UUID-backed).
 
 ### `PUT /v1/designs/:id/schematic`
 
-Replaces the schematic for the design in one transaction.
+Transactional replace. Payload shape:
 
 ```json
 {
@@ -152,34 +150,44 @@ Replaces the schematic for the design in one transaction.
 }
 ```
 
-- `instance_ref` must match a `ref_des` in the `instances` array within the same payload.
-- `net_name` must match a net in `nets`.
-- `ref_des` values must be unique within the payload.
+Validation rules:
 
-Success:
+- Every `instance_ref` in `pins` must match an `instances[].ref_des`.
+- Every `net_name` in `pins` must appear in `nets`.
+- `ref_des` values must be unique in the payload.
+
+**200** body:
 
 ```json
-{ "ok": true, "erc_warnings": [{ "code": "...", "severity": "warning", "message": "...", "detail": null }] }
+{ "ok": true, "erc_warnings": [] }
 ```
 
-`erc_warnings` are advisory (floating stubs, unused nets, etc.). Topology violations still yield HTTP **400**.
+`erc_warnings` are **non-blocking** advisories. Invalid topology returns **400**.
+
+---
 
 ### `POST /v1/designs/:id/schematic/suggest`
 
-Body `{ "prompt": "..." }`.
+**Copilot entrypoint** (same orchestration as **Generate** in the native app).
 
-This endpoint runs the **full copilot pipeline** (same behavior as **Generate** in the native app), not a prompt-only schematic draft:
+**Body:**
 
-1. Persists **intent** (`goal_text` = prompt).
-2. **xAI** returns planned Firecrawl queries + candidate MPNs.
-3. **Firecrawl web search** runs per query; hits are stored as **`design_research_artifacts`** (markdown excerpts).
-4. **xAI** resolves concrete parts + quantities from excerpts + candidates.
-5. **Postgres** upserts manufacturers/parts and **replaces the design BOM** with validated `part_id`s.
-6. **xAI** drafts `ReplaceSchematic` **grounded on that BOM** (instances must use BOM `part_id`s — no null catalog IDs when BOM lines exist).
+```json
+{ "prompt": "12 V to 5 V buck, 2 A, …" }
+```
 
-**Requirements:** `TOKITO_XAI_API_KEY` and `TOKITO_FIRECRAWL_API_KEY` must be configured on the server. If Firecrawl returns no ingestible pages or the model cannot resolve parts, the handler returns **400** with an explanatory message.
+**Stages (server-side):**
 
-Response wraps the draft plus ERC advisories:
+1. Upsert **intent** with `goal_text` = prompt.
+2. **xAI**: planned Firecrawl queries + candidate parts.
+3. **Firecrawl**: web search per query → **`design_research_artifacts`** (`kind = firecrawl_search`).
+4. **xAI**: resolve manufacturers/parts/qty from excerpts + candidates.
+5. **Postgres**: upsert catalog rows; **replace BOM** with validated `part_id`s.
+6. **xAI**: emit **`ReplaceSchematic`** with **BOM-grounded `part_id`s** (strict mode when BOM non-empty).
+
+**Environment:** `TOKITO_XAI_API_KEY` and `TOKITO_FIRECRAWL_API_KEY` must be set on the server. Failures (no ingestible pages, unresolved parts) surface as **400** with a message.
+
+**200** body:
 
 ```json
 {
@@ -188,9 +196,11 @@ Response wraps the draft plus ERC advisories:
 }
 ```
 
+---
+
 ### `POST /v1/designs/:id/schematic/validate`
 
-Same schematic JSON body as `PUT`; nothing is persisted. Response:
+Same JSON as **`PUT …/schematic`**; **nothing persisted**. Use for editor previews.
 
 ```json
 {
@@ -200,37 +210,63 @@ Same schematic JSON body as `PUT`; nothing is persisted. Response:
 }
 ```
 
-When `topology_ok` is `false`, `topology_error` holds the blocking validation message.
-
 ---
 
-## Intent & research (copilot grounding)
+## Intent & research
 
-### `GET /v1/designs/:id/intent`
-
-### `PUT /v1/designs/:id/intent`
+### `GET /v1/designs/:id/intent` · `PUT /v1/designs/:id/intent`
 
 ```json
-{ "goal_text": "5 V buck from 12 V in…", "constraints": { "iout_a": 2 } }
+{ "goal_text": "5 V buck from 12 V …", "constraints": { "iout_a": 2 } }
 ```
+
+`constraints` must be a JSON **object** at the root.
 
 ### `GET /v1/designs/:id/research`
 
+Lists **`design_research_artifacts`** newest-first.
+
+**Artifact `kind` values** (database check): `firecrawl_scrape`, `firecrawl_search`, `manual_note`.
+
 ### `POST /v1/designs/:id/research/scrape`
 
-Body: `{ "urls": ["https://example.com/datasheet.pdf"] }` — Firecrawl **scrape** per URL; artifacts appended.
+Body:
+
+```json
+{ "urls": ["https://example.com/datasheet"] }
+```
+
+Firecrawl **scrape** per URL; quota enforced per URL.
 
 ### `POST /v1/designs/:id/research/search`
 
-Body: `{ "query": "LM2596 5V buck datasheet", "limit": 5 }` — Firecrawl **web search** ([docs](https://docs.firecrawl.dev/features/search)); optional `scrapeOptions` are applied server-side (markdown per result). Each saved result counts toward scrape quota like URL scrapes.
+Body:
 
-Response: `{ "artifact_ids": [...], "count": N }`.
+```json
+{ "query": "LM2596 5V buck datasheet", "limit": 5 }
+```
 
-### Firecrawl proxies (authenticated)
+Firecrawl [**Search**](https://docs.firecrawl.dev/features/search); markdown per hit. Response shape includes **`artifact_ids`** and **`count`**.
 
-- `POST /v1/integrations/firecrawl/scrape` — passthrough scrape body (`url`, `formats`, …). One scrape quota unit per request.
-- `POST /v1/integrations/firecrawl/search` — passthrough search body (`query`, `limit`, `scrapeOptions`, …). One scrape quota unit per request.
+---
+
+## Integration proxies (authenticated)
+
+Low-level passthroughs for tooling (same scrape quota semantics):
+
+| Method | Path |
+|--------|------|
+| `POST` | `/v1/integrations/firecrawl/scrape` |
+| `POST` | `/v1/integrations/firecrawl/search` |
+
+---
 
 ## Errors
 
-Errors return JSON `{ "error": "message" }` with appropriate HTTP status (400 / 404 / 409 / 500).
+JSON body:
+
+```json
+{ "error": "human-readable message" }
+```
+
+Typical status codes: **400** (validation), **404**, **409** (conflict), **401/403** (auth), **502/503** (upstream integrations).
