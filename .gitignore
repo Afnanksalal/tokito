@@ -1,0 +1,57 @@
+# Rust / Cargo
+/target
+**/target/
+*.rs.bk
+*.pdb
+
+# Build artifacts & installers
+/bin
+/dist
+*.exe
+*.dll
+*.so
+*.dylib
+*.app
+
+# Environment & secrets (never commit)
+.env
+.env.local
+.env.*.local
+# Track `.env.example`; ignore other `.env.*` overrides
+.env.*
+!.env.example
+
+# Logs & profiling
+*.log
+*.prof*
+coverage/
+coverage.out
+*.profraw
+*.gcda
+*.gcno
+tarpaulin-report.html
+
+# IDE & editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# SQLx (offline data dir if enabled later)
+.sqlx/
+
+# Legacy SPA — lingering installs block deletes on some machines (see scripts/purge-web.ps1)
+web/node_modules/
+
+# Misc
+*.orig
+*.rej
