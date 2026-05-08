@@ -58,6 +58,7 @@ This document tracks **stages**, **quality bars**, and what is **already shipped
 **Shipped (native)**
 
 - Grid snap (~40 px), **rotation**, **undo/redo** for schematic edits.
+- CAD-style **tool modes** (select / wire / pan) and a **dockable Studio layout** with panels (Canvas, Copilot, Inspector, BOM, Parts, Console).
 - Persisted rotation in store.
 
 **Quality bar:** Predictable shortcuts; capped undo stack for memory safety.

@@ -5,6 +5,7 @@ mod bootstrap;
 mod canvas;
 mod symbols_draw;
 mod theme;
+mod ui;
 mod util;
 
 fn main() -> anyhow::Result<()> {
@@ -20,7 +21,7 @@ fn main() -> anyhow::Result<()> {
         native_options,
         Box::new(|cc| {
             theme::apply(&cc.egui_ctx);
-            Box::new(app)
+            Ok(Box::new(app))
         }),
     )
     .map_err(|e| anyhow::anyhow!("eframe: {e}"))

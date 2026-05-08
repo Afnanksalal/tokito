@@ -52,4 +52,4 @@ Do **not** file undisclosed vulnerabilities as public GitHub issues. Follow **[S
 
 ## Licensing
 
-By submitting a contribution, you agree it may be distributed under the project’s terms: **MIT OR Apache-2.0** (SPDX), at the recipient’s option. See **`LICENSE-MIT`** and **`LICENSE-APACHE`**.
+By submitting a contribution, you agree it may be distributed under the project’s terms: **MIT**. See [`LICENSE-MIT`](LICENSE-MIT).

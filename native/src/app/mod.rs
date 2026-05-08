@@ -3,10 +3,11 @@
 use anyhow::Context;
 use eframe::egui;
 use egui::{Pos2, Rect, Sense, Stroke, Vec2};
+use egui_dock::{DockArea, Style as DockStyle};
 use sqlx::postgres::PgPoolOptions;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Receiver;
-use tokito::models::{CreateDesign, ErcViolation, PartSearchParams, Position, ReplaceSchematic};
+use tokito::models::{ErcViolation, PartSearchParams, Position, ReplaceSchematic};
 use tokito::router::AppState;
 use tokito::store::intent;
 use uuid::Uuid;
@@ -16,6 +17,27 @@ use crate::canvas::{snap_world_pos, CanvasSnapshot, Sym, Viewport, Wire, CANVAS_
 use crate::util::{guess_prefix, next_refdes};
 
 type SchematicGenerationRx = Receiver<Result<(ReplaceSchematic, Vec<ErcViolation>), String>>;
+
+pub mod studio_dock;
+
+use studio_dock::StudioTab;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum CanvasTool {
+    #[default]
+    Select,
+    Wire,
+    Pan,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ProjectsSort {
+    #[default]
+    UpdatedDesc,
+    UpdatedAsc,
+    NameAsc,
+    NameDesc,
+}
 
 #[derive(Clone)]
 pub struct PartRow {
@@ -71,6 +93,34 @@ pub struct App {
 
     /// Background schematic generation (never block egui thread).
     generation_rx: Option<SchematicGenerationRx>,
+
+    /// Dockable studio panels (`egui_dock`).
+    dock_state: egui_dock::DockState<StudioTab>,
+
+    /// Ring buffer of console / status lines for the Console tab.
+    console_lines: Vec<String>,
+
+    /// BOM cache for the BOM tab.
+    bom_lines: Vec<tokito::models::BomLine>,
+    bom_loaded_for: Option<Uuid>,
+    bom_dirty: bool,
+
+    /// Canvas tool mode (CAD toolbar).
+    canvas_tool: CanvasTool,
+    show_grid: bool,
+    snap_enabled: bool,
+    /// Default net name for new wires.
+    new_wire_net: String,
+    /// Symbol under pointer (hover highlight).
+    canvas_hovered_sym: Option<String>,
+    /// Zoom-to-fit after layout (Home / toolbar).
+    pending_zoom_fit: bool,
+
+    /// Projects launcher.
+    projects_search: String,
+    projects_sort: ProjectsSort,
+    projects_pinned: HashSet<Uuid>,
+    recent_design_ids: Vec<Uuid>,
 }
 
 impl App {
@@ -135,6 +185,21 @@ impl App {
             canvas_redo: vec![],
             projects_need_refresh: true,
             generation_rx: None,
+            dock_state: egui_dock::DockState::new(StudioTab::ALL.into_iter().collect()),
+            console_lines: vec![],
+            bom_lines: vec![],
+            bom_loaded_for: None,
+            bom_dirty: true,
+            canvas_tool: CanvasTool::default(),
+            show_grid: true,
+            snap_enabled: true,
+            new_wire_net: "NET".to_string(),
+            canvas_hovered_sym: None,
+            pending_zoom_fit: false,
+            projects_search: String::new(),
+            projects_sort: ProjectsSort::default(),
+            projects_pinned: HashSet::new(),
+            recent_design_ids: vec![],
         })
     }
 
@@ -195,8 +260,57 @@ impl App {
         }
     }
 
+    fn log_console(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        self.console_lines.push(msg);
+        const MAX: usize = 250;
+        if self.console_lines.len() > MAX {
+            let drain = self.console_lines.len() - MAX;
+            self.console_lines.drain(0..drain);
+        }
+    }
+
     fn set_err(&mut self, e: impl std::fmt::Display) {
-        self.err = Some(e.to_string());
+        let s = e.to_string();
+        self.log_console(format!("[error] {s}"));
+        self.err = Some(s);
+    }
+
+    fn push_recent_design(&mut self, id: Uuid) {
+        self.recent_design_ids.retain(|x| *x != id);
+        self.recent_design_ids.insert(0, id);
+        self.recent_design_ids.truncate(24);
+    }
+
+    fn refresh_bom(&mut self, design_id: Uuid) {
+        let res = self
+            .rt
+            .block_on(async { tokito::store::bom::list_for_design(&self.pool, design_id).await });
+        match res {
+            Ok(lines) => {
+                let missing: Vec<Uuid> = lines
+                    .iter()
+                    .map(|l| l.part_id)
+                    .filter(|id| !self.part_cache.contains_key(id))
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                if !missing.is_empty() {
+                    let map_res = self.rt.block_on(async {
+                        tokito::store::parts::get_by_ids(&self.pool, &missing).await
+                    });
+                    if let Ok(map) = map_res {
+                        for (id, p) in map {
+                            self.part_cache.insert(id, p.mpn);
+                        }
+                    }
+                }
+                self.bom_lines = lines;
+                self.bom_loaded_for = Some(design_id);
+                self.bom_dirty = false;
+            }
+            Err(e) => self.set_err(e),
+        }
     }
 
     fn set_erc_note_from_slice(&mut self, w: &[tokito::models::ErcViolation]) {
@@ -307,6 +421,15 @@ impl App {
                     zoom: 1.0,
                 };
                 self.load_prompt_after_open(design_id);
+                self.push_recent_design(design_id);
+                self.bom_dirty = true;
+                self.log_console(format!(
+                    "Opened schematic · {}",
+                    self.design
+                        .as_ref()
+                        .map(|d| d.name.as_str())
+                        .unwrap_or("design")
+                ));
                 self.route = Route::Studio { design_id };
             }
             Err(e) => self.set_err(e),
@@ -323,6 +446,7 @@ impl App {
             Ok(()) => {
                 self.err = None;
                 self.set_erc_note_from_slice(&warns);
+                self.log_console("Saved schematic to board.".to_string());
             }
             Err(e) => {
                 self.erc_note = None;
@@ -463,6 +587,8 @@ impl App {
         self.wires = wires;
         self.err = None;
         self.set_erc_note_from_slice(erc_warnings);
+        self.bom_dirty = true;
+        self.log_console("Applied generated schematic draft.".to_string());
     }
 
     fn run_prompt_draft(&mut self, design_id: Uuid, ctx: &egui::Context) {
@@ -535,9 +661,16 @@ impl App {
         self.part_cache.insert(part.id, part.mpn.clone());
         let pos = if let Some(rect) = self.canvas_screen_rect {
             let origin = rect.min;
-            snap_world_pos(self.viewport.screen_to_world(origin, rect.center()))
-        } else {
+            let p = self.viewport.screen_to_world(origin, rect.center());
+            if self.snap_enabled {
+                snap_world_pos(p)
+            } else {
+                p
+            }
+        } else if self.snap_enabled {
             snap_world_pos(Pos2::new(240.0, 240.0))
+        } else {
+            Pos2::new(240.0, 240.0)
         };
         self.symbols.push(Sym {
             ref_des,

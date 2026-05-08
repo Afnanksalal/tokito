@@ -2,8 +2,10 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_async_jobs(ctx);
 
+        let tokens = crate::ui::tokens::UiTokens::default();
+
         egui::TopBottomPanel::top("topbar")
-            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(26, 28, 34)))
+            .frame(egui::Frame::none().fill(tokens.bg_panel))
             .show(ctx, |ui| {
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -12,7 +14,7 @@ impl eframe::App for App {
                         egui::RichText::new("Tokito")
                             .strong()
                             .size(17.0)
-                            .color(egui::Color32::from_rgb(235, 237, 240)),
+                            .color(tokens.text_primary),
                     );
 
                     match self.route {
@@ -52,7 +54,7 @@ impl eframe::App for App {
                             if let Some(err) = &self.err {
                                 ui.label(
                                     egui::RichText::new(err)
-                                        .color(egui::Color32::from_rgb(255, 120, 120))
+                                        .color(tokens.danger)
                                         .small(),
                                 );
                             }
@@ -60,7 +62,7 @@ impl eframe::App for App {
                                 ui.label(
                                     egui::RichText::new(note)
                                         .small()
-                                        .color(egui::Color32::from_rgb(210, 190, 110)),
+                                        .color(tokens.warning),
                                 );
                             }
                         });
@@ -95,6 +97,27 @@ impl eframe::App for App {
                 }
 
                 if !ctx.wants_keyboard_input() {
+                    if ctx.input(|i| i.key_pressed(egui::Key::Q)) {
+                        self.canvas_tool = CanvasTool::Select;
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::W)) {
+                        self.canvas_tool = CanvasTool::Wire;
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::H)) {
+                        self.canvas_tool = CanvasTool::Pan;
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::G)) {
+                        self.show_grid = !self.show_grid;
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::S))
+                        && !ctx.input(|i| i.modifiers.ctrl || i.modifiers.command)
+                    {
+                        self.snap_enabled = !self.snap_enabled;
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::Home)) {
+                        self.pending_zoom_fit = true;
+                    }
+
                     let undo = ctx.input(|i| {
                         (i.modifiers.ctrl || i.modifiers.command)
                             && !i.modifiers.shift

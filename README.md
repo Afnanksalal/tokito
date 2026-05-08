@@ -60,6 +60,13 @@ cargo run -p tokito-native
 
 On first launch the app migrates the schema and provisions a **local single-user** account for offline-style use.
 
+#### Studio UI quick tips
+
+- **Dockable panels**: Canvas, Copilot, Inspector, BOM, Parts, Console (drag tabs to rearrange).
+- **Tools**: `Q` select · `W` wire · `H` pan
+- **View**: mouse wheel zoom · `Home` zoom-to-fit · `G` grid · `S` snap
+- **Edit**: `Del` delete selection · `Esc` cancel wiring · `Ctrl/⌘+Z` undo · `Ctrl/⌘+Y` redo · Save/Reload buttons
+
 ### HTTP API only
 
 ```bash
@@ -122,7 +129,7 @@ tokito/
 ├── tests/            # Integration tests (Postgres)
 ├── Dockerfile
 ├── docker-compose.yml
-├── LICENSE-MIT · LICENSE-APACHE
+├── LICENSE-MIT
 ├── CONTRIBUTING.md · SECURITY.md
 └── README.md         # you are here
 ```
@@ -164,9 +171,9 @@ GitHub Actions runs format, clippy, unit tests, and the integration job against 
 
 ## License
 
-Dual-licensed under **MIT** ([`LICENSE-MIT`](LICENSE-MIT)) or **Apache 2.0** ([`LICENSE-APACHE`](LICENSE-APACHE)), at your option (**SPDX:** `MIT OR Apache-2.0`).
+Licensed under the **MIT License**. See [`LICENSE-MIT`](LICENSE-MIT).
 
-Unless you say otherwise, contributions you submit are accepted under those same terms.
+Unless you say otherwise, contributions you submit are accepted under the same terms.
 
 ---
 
