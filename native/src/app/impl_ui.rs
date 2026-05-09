@@ -213,16 +213,29 @@ impl App {
             let lw = r.width() * 0.38;
             let lh = r.height() * 0.4;
             let stroke_px = 1.35 * self.viewport.zoom;
-            crate::symbols_draw::paint_symbol_body(
-                &painter,
-                p,
-                lw,
-                lh,
-                self.symbols[i].rotation_deg,
-                kind,
-                ink,
-                stroke_px,
-            );
+            if let Some(lib) = &self.kicad_symbols {
+                lib.paint_kind_or_fallback(
+                    &painter,
+                    p,
+                    lw,
+                    lh,
+                    self.symbols[i].rotation_deg,
+                    kind,
+                    ink,
+                    stroke_px,
+                );
+            } else {
+                crate::symbols_draw::paint_symbol_body(
+                    &painter,
+                    p,
+                    lw,
+                    lh,
+                    self.symbols[i].rotation_deg,
+                    kind,
+                    ink,
+                    stroke_px,
+                );
+            }
 
             let z = self.viewport.zoom;
             painter.text(

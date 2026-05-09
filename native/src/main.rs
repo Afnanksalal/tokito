@@ -3,6 +3,7 @@
 mod app;
 mod bootstrap;
 mod canvas;
+mod kicad_symbols;
 mod symbols_draw;
 mod theme;
 mod ui;

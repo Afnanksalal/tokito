@@ -39,6 +39,12 @@ fn xf(pt: Pos2, pivot: Pos2, rot_deg: f32) -> Pos2 {
     Pos2::new(pivot.x + x * c - y * s, pivot.y + x * s + y * c)
 }
 
+/// Public transform helper (used by optional symbol providers).
+#[inline]
+pub fn xf_public(pt: Pos2, pivot: Pos2, rot_deg: f32) -> Pos2 {
+    xf(pt, pivot, rot_deg)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn paint_symbol_body(
     painter: &Painter,

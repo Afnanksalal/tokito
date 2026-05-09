@@ -2239,6 +2239,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
+name = "kiutils_kicad"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fd0ef6a8ae94db54f2a1e1d3a895f10fa01a738439172dd0117b7b73ac093da4"
+dependencies = [
+ "kiutils_sexpr",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "kiutils_sexpr"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c55b236882739e72e7d3eb9d006cd9aefe9f3545ee449fcf585de760f896d8d7"
+dependencies = [
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4494,6 +4514,7 @@ dependencies = [
  "egui",
  "egui_dock",
  "egui_extras",
+ "kiutils_kicad",
  "serde_json",
  "sqlx",
  "tokio",

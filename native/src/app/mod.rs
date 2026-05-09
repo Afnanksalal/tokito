@@ -121,6 +121,9 @@ pub struct App {
     projects_sort: ProjectsSort,
     projects_pinned: HashSet<Uuid>,
     recent_design_ids: Vec<Uuid>,
+
+    /// Optional external symbol provider (KiCad `.kicad_sym`).
+    kicad_symbols: Option<crate::kicad_symbols::KicadSymbolLibrary>,
 }
 
 impl App {
@@ -152,6 +155,10 @@ impl App {
         let state = AppState::try_new(pool.clone(), &cfg)?;
 
         let user_id = rt.block_on(async { ensure_local_user(&pool).await })?;
+
+        let kicad_symbols = std::env::var("TOKITO_KICAD_SYM_LIB")
+            .ok()
+            .and_then(|p| crate::kicad_symbols::KicadSymbolLibrary::try_load(p).ok());
 
         Ok(Self {
             rt,
@@ -200,6 +207,7 @@ impl App {
             projects_sort: ProjectsSort::default(),
             projects_pinned: HashSet::new(),
             recent_design_ids: vec![],
+            kicad_symbols,
         })
     }
 
