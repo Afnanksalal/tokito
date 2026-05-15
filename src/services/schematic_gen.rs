@@ -98,7 +98,7 @@ pub fn extract_llm_json_object(content: &str) -> AppResult<String> {
     ))
 }
 
-/// Calls xAI once and parses a ReplaceSchematic payload (not persisted).
+/// Single LLM call; returns ReplaceSchematic (not persisted).
 ///
 /// When `enforce_catalog_part_ids` is true (catalog pipeline), every instance must carry a
 /// non-null `part_id` present on the design BOM.
@@ -142,7 +142,7 @@ Return ONLY valid JSON (no markdown fences, no commentary) with this exact shape
   ]
 }
 Rules:
-- ref_des must be unique (KiCad-style). Prefixes: **R** resistor, **C** capacitor, **L** inductor, **D** diode, **Q** transistor/FET, **U** IC/regulator/controller.
+- ref_des must be unique (standard EDA). Prefixes: **R** resistor, **C** capacitor, **L** inductor, **D** diode, **Q** transistor/FET, **U** IC/regulator/controller.
 - Every net_name used in pins must appear in nets.
 - Every instance_ref in pins must appear in instances.ref_des.
 - **part_id is REQUIRED on every instance** — copy the UUID string exactly from bom_lines[].part_id (never null).
@@ -171,7 +171,7 @@ Return ONLY valid JSON (no markdown fences, no commentary) with this exact shape
   ]
 }
 Rules:
-- ref_des must be unique (like KiCad: U1,R3,C2). Use standard prefixes so the canvas can render symbols: **R** resistor, **C** capacitor, **L** inductor, **D** diode, **Q** transistor/FET, **U** IC/regulator/controller.
+- ref_des must be unique (e.g. U1,R3,C2). Use standard prefixes so the canvas can render symbols: **R** resistor, **C** capacitor, **L** inductor, **D** diode, **Q** transistor/FET, **U** IC/regulator/controller.
 - Every net_name used in pins must appear in nets.
 - Every instance_ref in pins must appear in instances.ref_des.
 - part_id must be null OR one of the UUID strings listed in bom_lines[].part_id when that component is used.

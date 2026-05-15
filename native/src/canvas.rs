@@ -23,8 +23,34 @@ pub struct Sym {
     /// Stored as degrees (matches `SchematicInstanceInput.rotation`).
     pub rotation_deg: f32,
     pub pins: Vec<String>,
+    pub footprint_ref: Option<String>,
+    /// Library symbol id (e.g. `Device:R`).
+    pub symbol_id: Option<String>,
+    /// Pin name + local offset (mm) relative to symbol center before rotation.
+    pub pin_layout: Vec<(String, f32, f32)>,
 }
 
+/// First-class orthogonal wire segment (CAD geometry).
+#[derive(Clone)]
+pub struct WireSegment {
+    pub id: uuid::Uuid,
+    pub start: Pos2,
+    pub end: Pos2,
+    pub net: String,
+}
+
+impl WireSegment {
+    pub fn new(start: Pos2, end: Pos2, net: impl Into<String>) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4(),
+            start,
+            end,
+            net: net.into(),
+        }
+    }
+}
+
+/// Legacy pin-to-pin wire (converted to segments on load).
 #[derive(Clone)]
 pub struct Wire {
     pub a: String,
@@ -33,6 +59,94 @@ pub struct Wire {
     pub b_pin: String,
     pub net: String,
     pub bends: Vec<Pos2>,
+}
+
+/// Build Manhattan segments between two world points.
+pub fn manhattan_segments(start: Pos2, end: Pos2, net: impl Into<String>) -> Vec<WireSegment> {
+    let net = net.into();
+    if (start.x - end.x).abs() < f32::EPSILON || (start.y - end.y).abs() < f32::EPSILON {
+        return vec![WireSegment::new(start, end, net)];
+    }
+    let mid = Pos2::new(end.x, start.y);
+    vec![
+        WireSegment::new(start, mid, net.clone()),
+        WireSegment::new(mid, end, net),
+    ]
+}
+
+/// Convert legacy wire + symbol positions into segments.
+pub fn wire_to_segments(w: &Wire, symbols: &[Sym]) -> Vec<WireSegment> {
+    let a = symbols.iter().find(|s| s.ref_des == w.a);
+    let b = symbols.iter().find(|s| s.ref_des == w.b);
+    match (a, b) {
+        (Some(sa), Some(sb)) => {
+            let pa = symbol_pin_world(sa, &w.a_pin);
+            let pb = symbol_pin_world(sb, &w.b_pin);
+            let points = route_points(pa, &w.bends, pb);
+            let mut out = Vec::new();
+            for pair in points.windows(2) {
+                out.push(WireSegment::new(pair[0], pair[1], w.net.clone()));
+            }
+            out
+        }
+        _ => vec![],
+    }
+}
+
+const PIN_ATTACH_RADIUS: f32 = 18.0;
+
+/// Pin names that have a segment endpoint within attach radius.
+pub fn display_pins_for_symbol(sym: &Sym, segments: &[WireSegment]) -> Vec<String> {
+    let mut pins = if sym.pins.is_empty() {
+        vec!["1".to_string(), "2".to_string()]
+    } else {
+        sym.pins.clone()
+    };
+    for pin_name in pins.clone() {
+        let pw = symbol_pin_world(sym, &pin_name);
+        let attached = segments.iter().any(|seg| {
+            seg.start.distance(pw) <= PIN_ATTACH_RADIUS || seg.end.distance(pw) <= PIN_ATTACH_RADIUS
+        });
+        if !attached && !sym.pins.is_empty() {
+            // keep declared pins
+        }
+    }
+    for seg in segments {
+        for pin_name in pins.clone() {
+            let pw = symbol_pin_world(sym, &pin_name);
+            if seg.start.distance(pw) <= PIN_ATTACH_RADIUS
+                || seg.end.distance(pw) <= PIN_ATTACH_RADIUS
+            {
+                if !pins.contains(&pin_name) {
+                    pins.push(pin_name);
+                }
+            }
+        }
+    }
+    pins.sort();
+    pins.dedup();
+    pins
+}
+
+/// If endpoint touches an existing segment (not at same point), insert a junction.
+pub fn junction_at_wire_crossing(
+    pos: Pos2,
+    segments: &[WireSegment],
+    junctions: &[Junction],
+) -> bool {
+    let on_junction = junctions.iter().any(|j| j.pos.distance(pos) <= 6.0);
+    if on_junction {
+        return false;
+    }
+    for seg in segments {
+        if crate::util::dist_point_to_segment_px(pos, seg.start, seg.end) <= 4.0
+            && pos.distance(seg.start) > 4.0
+            && pos.distance(seg.end) > 4.0
+        {
+            return true;
+        }
+    }
+    false
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +159,7 @@ pub struct PinEndpoint {
 pub struct NetLabel {
     pub name: String,
     pub pos: Pos2,
+    pub kind: tokito::models::NetLabelKind,
 }
 
 #[derive(Clone)]
@@ -79,7 +194,7 @@ pub struct BusSegment {
 #[derive(Clone)]
 pub struct CanvasSnapshot {
     pub symbols: Vec<Sym>,
-    pub wires: Vec<Wire>,
+    pub wire_segments: Vec<WireSegment>,
     pub net_labels: Vec<NetLabel>,
     pub junctions: Vec<Junction>,
     pub no_connects: Vec<NoConnect>,
@@ -88,33 +203,19 @@ pub struct CanvasSnapshot {
     pub buses: Vec<BusSegment>,
 }
 
-pub fn display_pins_for_symbol(sym: &Sym, wires: &[Wire]) -> Vec<String> {
-    let mut pins = if sym.pins.is_empty() {
-        vec!["1".to_string(), "2".to_string()]
-    } else {
-        sym.pins.clone()
-    };
-    for w in wires {
-        if w.a == sym.ref_des && !pins.contains(&w.a_pin) {
-            pins.push(w.a_pin.clone());
-        }
-        if w.b == sym.ref_des && !pins.contains(&w.b_pin) {
-            pins.push(w.b_pin.clone());
-        }
-    }
-    pins.sort();
-    pins
-}
-
 pub fn symbol_pin_world(sym: &Sym, pin_name: &str) -> Pos2 {
-    let right_side = matches!(
-        pin_name.trim().to_ascii_lowercase().as_str(),
-        "2" | "b" | "out" | "vout" | "sda" | "scl" | "tx" | "miso"
-    ) || pin_name.ends_with("_b");
-    let local = if right_side {
-        Vec2::new(70.0, 0.0)
+    let local = if let Some((_, x, y)) = sym.pin_layout.iter().find(|(n, _, _)| n == pin_name) {
+        Vec2::new(*x, *y)
     } else {
-        Vec2::new(-70.0, 0.0)
+        let right_side = matches!(
+            pin_name.trim().to_ascii_lowercase().as_str(),
+            "2" | "b" | "out" | "vout" | "sda" | "scl" | "tx" | "miso"
+        ) || pin_name.ends_with("_b");
+        if right_side {
+            Vec2::new(70.0, 0.0)
+        } else {
+            Vec2::new(-70.0, 0.0)
+        }
     };
     let turns = ((sym.rotation_deg / 90.0).round() as i32).rem_euclid(4);
     let rotated = match turns {

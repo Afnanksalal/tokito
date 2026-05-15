@@ -1,11 +1,7 @@
-//! Studio docking: `egui_dock` tabs + [`TabViewer`] that delegates to [`App`](super::App) methods.
-//!
-//! # Safety
-//! The viewer holds a raw `*mut App` and is only used for a single `DockArea::show_inside` call
-//! on the UI thread—no re-entrancy into the same `DockState` from within tab `ui`.
+//! Studio dock tabs (`egui_dock` TabViewer).
 
 use egui::{Id, Ui, WidgetText};
-use egui_dock::TabViewer;
+use egui_dock::{DockState, NodeIndex, TabViewer};
 use uuid::Uuid;
 
 use super::App;
@@ -13,22 +9,43 @@ use super::App;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StudioTab {
     Canvas,
-    Copilot,
-    Inspector,
+    Build,
+    DesignManager,
     Bom,
-    Parts,
+    Messages,
+    Research,
+    Viewer3d,
     Console,
 }
 
 impl StudioTab {
-    pub const ALL: [StudioTab; 6] = [
+    pub const DOCK_TABS: [StudioTab; 8] = [
         StudioTab::Canvas,
-        StudioTab::Copilot,
-        StudioTab::Inspector,
+        StudioTab::Build,
+        StudioTab::DesignManager,
         StudioTab::Bom,
-        StudioTab::Parts,
+        StudioTab::Messages,
+        StudioTab::Research,
+        StudioTab::Viewer3d,
         StudioTab::Console,
     ];
+}
+
+/// Default layout: canvas center, Build/BOM right, messages/console bottom.
+pub fn default_studio_dock() -> DockState<StudioTab> {
+    let mut dock = DockState::new(vec![StudioTab::Canvas]);
+    let root = NodeIndex::root();
+    let [canvas, _bottom] = dock.main_surface_mut().split_below(
+        root,
+        0.82,
+        vec![StudioTab::Messages, StudioTab::Console],
+    );
+    let [_canvas, _right] = dock.main_surface_mut().split_right(
+        canvas,
+        0.68,
+        vec![StudioTab::Build, StudioTab::Bom, StudioTab::DesignManager],
+    );
+    dock
 }
 
 pub struct AppDockViewer {
@@ -41,23 +58,31 @@ impl TabViewer for AppDockViewer {
 
     fn title(&mut self, tab: &mut Self::Tab) -> WidgetText {
         match tab {
-            StudioTab::Canvas => "Canvas".into(),
-            StudioTab::Copilot => "Copilot".into(),
-            StudioTab::Inspector => "Inspector".into(),
+            StudioTab::Canvas => "Schematic".into(),
+            StudioTab::Build => "Build".into(),
+            StudioTab::DesignManager => "Design".into(),
             StudioTab::Bom => "BOM".into(),
-            StudioTab::Parts => "Parts".into(),
+            StudioTab::Messages => "Messages".into(),
+            StudioTab::Research => "Research".into(),
+            StudioTab::Viewer3d => "3D".into(),
             StudioTab::Console => "Console".into(),
         }
     }
 
     fn ui(&mut self, ui: &mut Ui, tab: &mut Self::Tab) {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        let ctx = ui.ctx().clone();
+        // SAFETY: `app` points at the `App` in `eframe::App::update`, which is mutably borrowed
+        // for the duration of `DockArea::show_inside` and not moved.
         let app = unsafe { &mut *self.app };
         match tab {
             StudioTab::Canvas => app.render_studio_canvas_tab(ui, self.design_id),
-            StudioTab::Copilot => app.render_studio_copilot_tab(ui, self.design_id),
-            StudioTab::Inspector => app.render_studio_inspector_tab(ui),
+            StudioTab::Build => app.render_studio_build_tab(ui, self.design_id),
+            StudioTab::DesignManager => app.render_studio_design_manager_tab(ui),
             StudioTab::Bom => app.render_studio_bom_tab(ui, self.design_id),
-            StudioTab::Parts => app.render_studio_parts_tab(ui),
+            StudioTab::Messages => app.render_studio_messages_tab(ui),
+            StudioTab::Research => app.render_studio_research_tab(ui, self.design_id),
+            StudioTab::Viewer3d => app.render_studio_viewer3d_tab(ui, &ctx),
             StudioTab::Console => app.render_studio_console_tab(ui),
         }
     }

@@ -10,6 +10,17 @@ Security fixes land on the **default branch** (`main` / `master`). Tokito **0.1.
 
 **Please do not** open a **public** issue for an undisclosed security bug.
 
+```mermaid
+flowchart TD
+  V[You found a security issue] --> CH{Private reporting enabled<br/>on this repo?}
+  CH -->|yes| GH[GitHub → Security →<br/>Report a vulnerability]
+  CH -->|no| EM[Contact maintainers privately<br/>Subject: Security: Tokito …]
+  GH --> INF[Include: surface · version · repro]
+  EM --> INF
+  INF --> ACK[Acknowledgement<br/>within a few business days]
+  ACK --> FIX[Fix coordinated disclosure]
+```
+
 1. Use GitHub **private vulnerability reporting** if it is enabled for this repository (**Security → Report a vulnerability**).
 2. Otherwise, contact the maintainers privately with a subject line such as `Security: Tokito <short summary>`.
 
@@ -26,6 +37,7 @@ We aim to acknowledge valid reports within a **few business days** and coordinat
 ## Scope & expectations
 
 - Tokito stores **design and catalog data** and may call **third-party APIs** (xAI, Firecrawl, distributors). **Operational security matters**: protect **`TOKITO_JWT_SECRET`**, database credentials, and API keys; use **TLS** in production; restrict network access to Postgres.
+- **Release API builds** require `TOKITO_JWT_SECRET`; debug builds use an insecure default that must not be deployed.
 - **Supply chain**: run **`cargo audit`** or enable **Dependabot** in your fork/org as part of your own review process.
 
 Thank you for helping keep users safe.

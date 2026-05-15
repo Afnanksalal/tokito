@@ -19,26 +19,69 @@ impl eframe::App for App {
 
                     match self.route {
                         Route::Projects => {
-                            if ui
-                                .add(egui::Button::new("Refresh").fill(egui::Color32::from_rgb(
-                                    38, 41, 50,
-                                )))
+                            if crate::ui::widgets::secondary_button(ui, &tokens, "Refresh")
                                 .clicked()
                             {
                                 self.reload_projects();
                             }
                         }
-                        Route::Studio { .. } => {
+                        Route::Studio { design_id } => {
+                            if let Some(d) = &self.design {
+                                ui.label(
+                                    egui::RichText::new(&d.name)
+                                        .strong()
+                                        .color(tokens.text_primary),
+                                );
+                                ui.separator();
+                            }
+                            if crate::ui::widgets::secondary_button(ui, &tokens, "Save").clicked() {
+                                self.save_schematic(design_id);
+                            }
+                            if crate::ui::widgets::secondary_button(ui, &tokens, "ERC").clicked() {
+                                self.run_erc_on_editor();
+                            }
+                            if self.studio_dirty {
+                                ui.label(
+                                    egui::RichText::new("● Unsaved")
+                                        .small()
+                                        .color(tokens.warning),
+                                );
+                            }
+                            ui.menu_button("Export", |ui| {
+                                if ui.button("SVG schematic").clicked() {
+                                    self.export_schematic_file("svg");
+                                    ui.close_menu();
+                                }
+                                if ui.button("Connectivity netlist (.txt)").clicked() {
+                                    self.export_schematic_file("netlist");
+                                    ui.close_menu();
+                                }
+                                if ui.button("S-expression netlist (.net)").clicked() {
+                                    self.export_schematic_file("sexp_netlist");
+                                    ui.close_menu();
+                                }
+                                if ui.button("PDF plot (.pdf)").clicked() {
+                                    self.export_schematic_file("pdf");
+                                    ui.close_menu();
+                                }
+                                if ui.button("MCAD handoff (.json)").clicked() {
+                                    self.export_schematic_file("mcad");
+                                    ui.close_menu();
+                                }
+                            });
+                            if crate::ui::widgets::secondary_button(ui, &tokens, "Undo").clicked() {
+                                self.undo_canvas();
+                            }
+                            if crate::ui::widgets::secondary_button(ui, &tokens, "Redo").clicked() {
+                                self.redo_canvas();
+                            }
                             if ui
-                                .add(egui::Button::new("← Projects").fill(egui::Color32::from_rgb(
-                                    38, 41, 50,
-                                )))
+                                .add(egui::Button::new("← Projects").fill(tokens.bg_elevated))
                                 .clicked()
                             {
-                                self.canvas_undo.clear();
-                                self.canvas_redo.clear();
+                                self.editor.clear_history();
                                 self.erc_note = None;
-                                self.canvas_screen_rect = None;
+                                self.editor.screen_rect = None;
                                 self.generation_rx = None;
                                 self.prompt_busy = false;
                                 self.route = Route::Projects;
@@ -80,8 +123,16 @@ impl eframe::App for App {
                 self.ui_projects(ctx);
             }
             Route::Studio { design_id } => {
+                self.show_command_palette(ctx);
+
+                if ctx.input(|i| {
+                    i.modifiers.command && i.modifiers.shift && i.key_pressed(egui::Key::P)
+                }) {
+                    self.command_palette_open = true;
+                }
+
                 if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    self.wire_drag_from = None;
+                    self.editor.wire_drag_from = None;
                 }
 
                 if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
@@ -98,42 +149,54 @@ impl eframe::App for App {
 
                 if !ctx.wants_keyboard_input() {
                     if ctx.input(|i| i.key_pressed(egui::Key::Q)) {
-                        self.canvas_tool = CanvasTool::Select;
+                        self.editor.tool = CanvasTool::Select;
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::A)) {
+                        self.place_generic_symbol("U");
                     }
                     if ctx.input(|i| i.key_pressed(egui::Key::W)) {
-                        self.canvas_tool = CanvasTool::Wire;
+                        self.editor.tool = CanvasTool::Wire;
                     }
                     if ctx.input(|i| i.key_pressed(egui::Key::N)) {
-                        self.canvas_tool = CanvasTool::NetLabel;
+                        self.editor.tool = CanvasTool::NetLabel;
                     }
                     if ctx.input(|i| i.key_pressed(egui::Key::P)) {
-                        self.canvas_tool = CanvasTool::Power;
+                        self.editor.tool = CanvasTool::Power;
                     }
                     if ctx.input(|i| i.key_pressed(egui::Key::J)) {
-                        self.canvas_tool = CanvasTool::Junction;
+                        self.editor.tool = CanvasTool::Junction;
                     }
                     if ctx.input(|i| i.key_pressed(egui::Key::X)) {
-                        self.canvas_tool = CanvasTool::NoConnect;
+                        self.editor.tool = CanvasTool::NoConnect;
                     }
                     if ctx.input(|i| i.key_pressed(egui::Key::B)) {
-                        self.canvas_tool = CanvasTool::Bus;
+                        self.editor.tool = CanvasTool::Bus;
                     }
                     if ctx.input(|i| i.key_pressed(egui::Key::T)) {
-                        self.canvas_tool = CanvasTool::Text;
+                        self.editor.tool = CanvasTool::Text;
                     }
                     if ctx.input(|i| i.key_pressed(egui::Key::H)) {
-                        self.canvas_tool = CanvasTool::Pan;
+                        self.editor.tool = CanvasTool::Pan;
                     }
                     if ctx.input(|i| i.key_pressed(egui::Key::G)) {
-                        self.show_grid = !self.show_grid;
+                        self.editor.show_grid = !self.editor.show_grid;
                     }
                     if ctx.input(|i| i.key_pressed(egui::Key::S))
                         && !ctx.input(|i| i.modifiers.ctrl || i.modifiers.command)
                     {
-                        self.snap_enabled = !self.snap_enabled;
+                        self.editor.snap_enabled = !self.editor.snap_enabled;
                     }
                     if ctx.input(|i| i.key_pressed(egui::Key::Home)) {
-                        self.pending_zoom_fit = true;
+                        self.editor.request_zoom_fit();
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::R)) {
+                        self.editor.rotate_selected_symbols(90.0);
+                    }
+                    if ctx.input(|i| {
+                        i.key_pressed(egui::Key::D)
+                            && (i.modifiers.ctrl || i.modifiers.command)
+                    }) {
+                        self.duplicate_selection();
                     }
 
                     let undo = ctx.input(|i| {

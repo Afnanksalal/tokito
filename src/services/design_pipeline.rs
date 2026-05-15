@@ -1,7 +1,7 @@
 //! Prompt → plan (xAI) → Firecrawl web search → research artifacts →
-//! resolve parts + BOM (xAI + DB) → schematic from **catalog parts only** (xAI).
+//! Design pipeline: plan, research, resolve BOM, generate schematic.
 //!
-//! This is the canonical “hardware copilot” path: no standalone generate without
+//! This is the canonical AI build path: no standalone generate without
 //! datasheet-backed catalog population first.
 
 use crate::error::{AppError, AppResult};

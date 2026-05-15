@@ -1,83 +1,147 @@
 # Architecture
 
-Tokito splits into a **Rust library + Axum server**, an optional **egui native shell**, and **PostgreSQL** as the system of record. This page summarizes how requests flow and where state lives.
-
----
+Tokito is a Rust library and Axum server with an optional egui native shell. **Embedded PostgreSQL** (pg-embed) is the system of record — no external or cloud database.
 
 ## Runtime surfaces
 
-| Surface | Crate / binary | Role |
-|---------|------------------|------|
-| **Desktop studio** | `tokito-native` | egui UI, SQLx pool, calls into `tokito` as a library—no HTTP to self required for editing |
-| **HTTP API** | `tokito` binary | Same domain logic; serves `/v1`, `/health`, optional static SPA (`TOKITO_STATIC_DIR`) |
+| Surface | Binary | Role |
+|---------|--------|------|
+| Desktop | `tokito-native` | egui studio; links `tokito` for HTTP-backed features |
+| API | `tokito` | `/v1`, `/health`, optional static files (`TOKITO_STATIC_DIR`) |
 
-Both binaries **run SQLx migrations** from **`migrations/`** at startup (`sqlx::migrate!`), keeping schema and code in sync for single-developer and small-team deployments.
-
----
-
-## Request path (HTTP)
-
-```
-Client → Axum router (CORS, trace)
-      → Auth middleware where applicable
-      → Handler (validation)
-      → Store (SQLx) and/or Service (integrations)
-      → PostgreSQL / external APIs (xAI, Firecrawl, …)
-```
-
-- **`src/router.rs`** — route table, **`AppState`** (pool, HTTP client, integration configs).
-- **`src/handlers/`** — HTTP adapters; map **`AppError`** to JSON.
-- **`src/store/`** — queries and transactions (`bom::replace_validated`, `schematic::replace`, …).
-- **`src/services/`** — orchestration and vendors:
-  - **`design_pipeline`** — copilot: plan → Firecrawl → resolve parts → BOM → schematic.
-  - **`research_pipeline`** — Firecrawl search/scrape → **`design_research_artifacts`**.
-  - **`schematic_gen`** / **`schematic_validate`** — LLM draft + topology & ERC.
-  - **`xai`**, **`firecrawl`**, **`agent`**, offers sync, etc.
-
----
-
-## Copilot data flow (conceptual)
-
-```
-User prompt
-    → intent persisted
-    → xAI: queries + candidate MPNs
-    → Firecrawl: artifacts rows (search/scrape)
-    → xAI: resolved BOM lines
-    → Postgres: manufacturers, parts, bom_lines
-    → xAI: ReplaceSchematic (part_id ∈ BOM)
+```mermaid
+flowchart TB
+  subgraph desktop[Desktop shell]
+    N[tokito-native]
+  end
+  subgraph server[HTTP server]
+    B[tokito binary]
+  end
+  subgraph core[Shared library]
+    L[tokito crate<br/>router · handlers · store · services]
+  end
+  subgraph data[Local data]
+    PG[(Embedded PostgreSQL<br/>pg-embed)]
+  end
+  N --> L
+  B --> L
+  L --> PG
 ```
 
-Research excerpts and BOM lines are concatenated into the **grounding context** for schematic generation so pin names and topology align with stored catalog rows.
+Both binaries run SQLx migrations from `migrations/` at startup.
 
----
+## HTTP request path
 
-## Data model (PostgreSQL)
+```mermaid
+flowchart LR
+  C[Client] --> A[Axum<br/>CORS · trace]
+  A --> AM[Auth middleware]
+  AM --> H[Handler]
+  H --> S[Store<br/>SQLx]
+  H --> SV[Service layer<br/>external APIs]
+  S --> DB[(Embedded PostgreSQL)]
+  SV --> X[xAI]
+  SV --> F[Firecrawl]
+  SV --> N[Nexar]
+  SV --> L[LCSC]
+```
 
-| Area | Tables (conceptual) |
-|------|---------------------|
-| Identity / quotas | Users, API keys, usage counters (see migrations) |
-| Catalog | **`manufacturers`**, **`parts`** (unique `(manufacturer_id, mpn)`), **`part_offers`** |
-| Design container | **`designs`** |
-| Intent | **`design_intents`** (`goal_text`, `constraints_json`) |
-| Research | **`design_research_artifacts`** (`kind`, `source_url`, `content_text`, …) |
-| Schematic | **`schematic_instances`**, **`schematic_nets`**, **`schematic_pins`** |
-| Procurement | **`bom_lines`** (editable aggregate; may diverge from canvas until unified) |
+| Layer | Path | Responsibility |
+|-------|------|----------------|
+| Router | `src/router.rs` | Routes, `AppState` |
+| Handlers | `src/handlers/` | HTTP adapters, `AppError` mapping |
+| Store | `src/store/` | Queries and transactions |
+| Services | `src/services/` | AI build, validation, exports, catalog |
 
-Foreign keys enforce visibility and cascade rules per migration files.
+Key services: `design_pipeline`, `schematic_gen`, `schematic_validate`, `erc_fixes`, `sexp_netlist`, `svg_export`, `pdf_export`, `catalog_search`, `lcsc`, `nexar`.
 
----
+## AI build data flow
 
-## Operational notes
+```mermaid
+flowchart TD
+  P[User prompt] --> I[(design_intents)]
+  I --> X1[xAI<br/>queries · candidate MPNs]
+  X1 --> FC[Firecrawl]
+  FC --> RA[(design_research_artifacts)]
+  RA --> X2[xAI<br/>resolve BOM]
+  X2 --> C[(manufacturers · parts)]
+  X2 --> B[(bom_lines)]
+  C --> X3[xAI<br/>ReplaceSchematic]
+  B --> X3
+  X3 --> R[Schematic JSON<br/>BOM-grounded part_id only]
+```
 
-- **Pooling:** `TOKITO_DB_MAX_CONNECTIONS` caps the SQLx pool.
-- **Horizontal scale:** Keep the API **stateless**; use one logical Postgres (read replicas only with explicit read routing if added later).
-- **Migrations at boot:** Fine for MVP; larger deployments may prefer external migration jobs and a feature flag to disable auto-migrate.
-- **Secrets:** Never commit `.env`; production requires strong **`TOKITO_JWT_SECRET`** and TLS in front of the API.
+## Data model
 
----
+| Area | Tables |
+|------|--------|
+| Identity | users, API keys, usage |
+| Catalog | manufacturers, parts, part_offers |
+| Design | designs, design_intents, design_research_artifacts |
+| Schematic | schematic_instances, schematic_nets, schematic_pins; `schematic_document` JSONB |
+| BOM | bom_lines |
 
-## Related reading
+Domain relationships (simplified):
 
-- **[API.md](API.md)** — route-level detail  
-- **[PRODUCT_PLAN.md](PRODUCT_PLAN.md)** — roadmap vs. shipped features  
+```mermaid
+flowchart LR
+  subgraph id[Identity]
+    U[users]
+    A[API keys]
+  end
+  subgraph cat[Catalog]
+    MF[manufacturers]
+    PT[parts]
+    PO[part_offers]
+  end
+  subgraph des[Design]
+    D[designs]
+    IN[design_intents]
+    RE[design_research_artifacts]
+  end
+  subgraph sch[Schematic]
+    SI["schematic_* tables"]
+    DOC[schematic_document JSONB]
+  end
+  subgraph bom[BOM]
+    BL[bom_lines]
+  end
+  U --> D
+  MF --> PT
+  PT --> PO
+  D --> IN
+  D --> RE
+  D --> SI
+  D --> DOC
+  D --> BL
+  PT --> BL
+```
+
+## Native editor
+
+| Module | Role |
+|--------|------|
+| `native/src/editor/` | Canvas, tools, hit-test, render, undo |
+| `native/src/app/studio/` | Dock UI, place panel, inspector, Build tab |
+| `native/src/base_symbols/` | Load `.tokito_sym` from `assets/base-symbols/` + user dir |
+| `native/src/symbol_format/` | Tokito symbol S-expression parser |
+
+Native save path:
+
+```mermaid
+flowchart LR
+  G[Canvas graph] --> SD[SchematicDocument]
+  SD --> E[ERC]
+  E --> PG[(Postgres<br/>schematic + document JSON)]
+```
+
+## Operations
+
+- **Database:** pg-embed under the user data dir (`TOKITO_EMBEDDED_PORT`, default `15432`). Hold the `EmbeddedPostgres` handle for the process lifetime.
+- **Pool size:** `TOKITO_DB_MAX_CONNECTIONS` (default 10).
+- **Migrations:** applied at process start.
+- **Secrets:** set `TOKITO_JWT_SECRET` in release builds; never commit `.env`.
+
+## Related
+
+- [API.md](API.md) — route reference

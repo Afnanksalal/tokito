@@ -1,9 +1,14 @@
 //! Tokito native desktop shell (eframe + egui).
 
 mod app;
+mod base_symbols;
 mod bootstrap;
 mod canvas;
-mod kicad_symbols;
+mod editor;
+mod mcad_viewer;
+mod paths;
+mod symbol_format;
+mod symbol_library;
 mod symbols_draw;
 mod theme;
 mod ui;

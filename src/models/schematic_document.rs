@@ -394,26 +394,10 @@ impl SchematicDocument {
             }
         }
 
-        let mut semantic_points = BTreeSet::new();
-        for point in component_pins.keys() {
-            semantic_points.insert(*point);
-        }
-        for label in &self.net_labels {
-            semantic_points.insert(point_key(label.position));
-        }
-        for power in &self.power_symbols {
-            semantic_points.insert(point_key(power.position));
-        }
-        for junction in &self.junctions {
-            semantic_points.insert(point_key(junction.position));
-        }
-        for no_connect in &self.no_connects {
-            semantic_points.insert(point_key(no_connect.position));
-        }
-
         for segment in &self.wire_segments {
+            let sheet_points = semantic_points_on_sheet(self, &segment.sheet_id);
             let mut points = vec![point_key(segment.start), point_key(segment.end)];
-            for point in &semantic_points {
+            for point in &sheet_points {
                 if point_lies_on_segment(*point, segment.start, segment.end) {
                     points.push(*point);
                 }
@@ -424,6 +408,8 @@ impl SchematicDocument {
                 dsu.union(pair[0], pair[1]);
             }
         }
+
+        apply_cross_sheet_label_links(self, &mut dsu);
 
         let mut net_names: BTreeMap<PointKey, BTreeSet<String>> = BTreeMap::new();
         for segment in &self.wire_segments {
@@ -635,6 +621,90 @@ fn normalized_net_name(name: Option<&str>) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+fn semantic_points_on_sheet(doc: &SchematicDocument, sheet_id: &str) -> BTreeSet<PointKey> {
+    let mut set = BTreeSet::new();
+    for symbol in doc.symbols.iter().filter(|s| s.sheet_id == sheet_id) {
+        for pin in &symbol.pins {
+            set.insert(point_key(symbol.absolute_pin_position(pin)));
+        }
+    }
+    for label in doc.net_labels.iter().filter(|l| l.sheet_id == sheet_id) {
+        set.insert(point_key(label.position));
+    }
+    for power in doc.power_symbols.iter().filter(|p| p.sheet_id == sheet_id) {
+        set.insert(point_key(power.position));
+    }
+    for junction in doc.junctions.iter().filter(|j| j.sheet_id == sheet_id) {
+        set.insert(point_key(junction.position));
+    }
+    for nc in doc.no_connects.iter().filter(|n| n.sheet_id == sheet_id) {
+        set.insert(point_key(nc.position));
+    }
+    set
+}
+
+/// `ChildSheet/LocalNet` on a parent sheet links to `LocalNet` on the child sheet.
+fn parse_hierarchical_label(name: &str) -> Option<(String, String)> {
+    let name = name.trim();
+    let (sheet, net) = name.split_once('/')?;
+    let sheet = sheet.trim();
+    let net = net.trim();
+    if sheet.is_empty() || net.is_empty() {
+        return None;
+    }
+    Some((sheet.to_string(), net.to_string()))
+}
+
+fn apply_cross_sheet_label_links(doc: &SchematicDocument, dsu: &mut DisjointSet) {
+    let mut global_by_name: BTreeMap<String, Vec<PointKey>> = BTreeMap::new();
+    for label in &doc.net_labels {
+        if label.kind != NetLabelKind::Global {
+            continue;
+        }
+        let key = label.name.trim().to_string();
+        if key.is_empty() {
+            continue;
+        }
+        let pt = point_key(label.position);
+        dsu.make(pt);
+        global_by_name.entry(key).or_default().push(pt);
+    }
+    for points in global_by_name.values() {
+        if let Some(&first) = points.first() {
+            for &p in &points[1..] {
+                dsu.union(first, p);
+            }
+        }
+    }
+
+    let sheet_ids: BTreeSet<String> = doc.sheets.iter().map(|s| s.id.clone()).collect();
+    for label in &doc.net_labels {
+        if label.kind != NetLabelKind::Hierarchical {
+            continue;
+        }
+        let Some((child_sheet, local_net)) = parse_hierarchical_label(&label.name) else {
+            continue;
+        };
+        if !sheet_ids.contains(&child_sheet) {
+            continue;
+        }
+        let parent_pt = point_key(label.position);
+        dsu.make(parent_pt);
+        for other in &doc.net_labels {
+            if other.sheet_id != child_sheet {
+                continue;
+            }
+            let matches = other.name.trim() == local_net.as_str()
+                || other.name.trim() == format!("{child_sheet}/{local_net}");
+            if matches {
+                let child_pt = point_key(other.position);
+                dsu.make(child_pt);
+                dsu.union(parent_pt, child_pt);
+            }
+        }
+    }
+}
+
 fn generic_pins(pin_names: Vec<String>) -> Vec<DocumentPin> {
     let count = pin_names.len().max(2);
     let top = -((count as f64 - 1.0) * PIN_SPACING) / 2.0;
@@ -827,6 +897,83 @@ mod tests {
             .pins
             .iter()
             .any(|p| { p.instance_ref == "C1" && p.pin_name == "1" && p.net_name == "MID_NET" }));
+    }
+
+    #[test]
+    fn global_net_labels_connect_across_sheets() {
+        let mut doc = SchematicDocument::empty();
+        doc.sheets.push(SchematicSheet {
+            id: "S2".into(),
+            name: "Power".into(),
+            path: "/S2".into(),
+            page_size: PageSize {
+                width: 1160.0,
+                height: 820.0,
+            },
+            grid: GRID,
+            title_block: BTreeMap::new(),
+        });
+        doc.symbols.push(DocumentSymbol {
+            id: Uuid::new_v4(),
+            sheet_id: DEFAULT_SHEET_ID.to_string(),
+            part_id: None,
+            symbol_id: None,
+            ref_des: "R1".into(),
+            value: None,
+            position: DocumentPoint { x: 80.0, y: 80.0 },
+            rotation: 0.0,
+            mirror: MirrorMode::None,
+            fields: BTreeMap::new(),
+            footprint_ref: None,
+            pins: generic_pins(vec!["1".into(), "2".into()]),
+        });
+        doc.symbols.push(DocumentSymbol {
+            id: Uuid::new_v4(),
+            sheet_id: "S2".into(),
+            part_id: None,
+            symbol_id: None,
+            ref_des: "R2".into(),
+            value: None,
+            position: DocumentPoint { x: 80.0, y: 80.0 },
+            rotation: 0.0,
+            mirror: MirrorMode::None,
+            fields: BTreeMap::new(),
+            footprint_ref: None,
+            pins: generic_pins(vec!["1".into(), "2".into()]),
+        });
+        let r1_pin = doc.symbols[0].absolute_pin_position(&doc.symbols[0].pins[0]);
+        let r2_pin = doc.symbols[1].absolute_pin_position(&doc.symbols[1].pins[0]);
+        doc.net_labels.push(DocumentNetLabel {
+            id: Uuid::new_v4(),
+            sheet_id: DEFAULT_SHEET_ID.to_string(),
+            name: "GND".into(),
+            kind: NetLabelKind::Global,
+            position: r1_pin,
+            orientation: PinOrientation::Right,
+        });
+        doc.net_labels.push(DocumentNetLabel {
+            id: Uuid::new_v4(),
+            sheet_id: "S2".into(),
+            name: "GND".into(),
+            kind: NetLabelKind::Global,
+            position: r2_pin,
+            orientation: PinOrientation::Right,
+        });
+
+        let (replace, _) = doc.to_replace_schematic();
+        let gnd_pins: Vec<_> = replace
+            .pins
+            .iter()
+            .filter(|p| p.net_name == "GND")
+            .collect();
+        assert!(
+            gnd_pins.iter().any(|p| p.instance_ref == "R1"),
+            "R1 should be on GND"
+        );
+        assert!(
+            gnd_pins.iter().any(|p| p.instance_ref == "R2"),
+            "R2 on sheet 2 should share global GND"
+        );
     }
 
     #[test]

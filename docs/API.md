@@ -4,11 +4,50 @@ Tokito exposes a **versioned JSON API** under **`/v1`**, plus **`GET /health`**.
 
 **Typical base URL (local):** `http://localhost:8080`
 
+```mermaid
+flowchart LR
+  subgraph clients[Clients]
+    WEB[Browser / SPA]
+    NAT[Native studio]
+    SCR[Scripts · CI]
+  end
+  subgraph api[Tokito API]
+    AX["/health · /v1/*"]
+  end
+  subgraph core[Domain]
+    ST[Store SQLx]
+    SV[Services]
+  end
+  DB[(Embedded Postgres)]
+  WEB --> AX
+  NAT --> AX
+  SCR --> AX
+  AX --> ST
+  AX --> SV
+  ST --> DB
+  SV --> DB
+```
+
 ---
 
 ## Authentication
 
 Protected routes require a **Bearer JWT** obtained via **`POST /v1/login`** (after **`POST /v1/register`**). Send:
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant A as Tokito API
+  participant D as Database
+  C->>A: POST /v1/register
+  A->>D: persist user + password hash
+  C->>A: POST /v1/login
+  A->>D: verify credentials
+  A-->>C: JWT access token
+  Note over C,A: Subsequent calls: Authorization: Bearer …
+  C->>A: GET /v1/... (Bearer)
+  A->>D: authorized request
+```
 
 ```http
 Authorization: Bearer <token>
@@ -210,12 +249,36 @@ Minimal shape:
 
 ### `POST /v1/designs/:id/schematic/suggest`
 
-**Copilot entrypoint** (same orchestration as **Generate** in the native app).
+**AI build entrypoint** (same orchestration as **Build schematic** in the native app).
 
 **Body:**
 
 ```json
 { "prompt": "12 V to 5 V buck, 2 A, …" }
+```
+
+**Orchestration** (mirrors the **Build** tab in the native app):
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant T as Tokito
+  participant D as Postgres
+  participant X as xAI
+  participant F as Firecrawl
+  C->>T: POST …/schematic/suggest
+  T->>D: upsert design_intents goal_text
+  T->>X: plan queries + candidate MPNs
+  loop Per planned query
+    T->>F: web search / scrape
+    F-->>T: excerpts
+    T->>D: insert design_research_artifacts
+  end
+  T->>X: resolve BOM + schematic
+  X-->>T: manufacturers parts bom_lines
+  T->>D: upsert catalog + replace BOM
+  X-->>T: ReplaceSchematic JSON
+  T-->>C: schematic + erc_warnings
 ```
 
 **Stages (server-side):**
@@ -305,10 +368,20 @@ Low-level passthroughs for tooling (same scrape quota semantics):
 
 ## Errors
 
-JSON body:
+Typical error JSON:
 
 ```json
 { "error": "human-readable message" }
+```
+
+```mermaid
+flowchart TD
+  REQ[HTTP request] --> ST{Status}
+  ST -->|400| V[Validation / topology / upstream message]
+  ST -->|401 / 403| A[Auth]
+  ST -->|404| N[Not found]
+  ST -->|409| CF[Conflict]
+  ST -->|502 / 503| UP[Bad gateway / upstream integrations]
 ```
 
 Typical status codes: **400** (validation), **404**, **409** (conflict), **401/403** (auth), **502/503** (upstream integrations).

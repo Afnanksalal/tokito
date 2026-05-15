@@ -1,142 +1,123 @@
 # Tokito
 
-**Grounded hardware design, not prompt fiction.** Tokito is a **desktop studio** and **HTTP API** for **parts**, **BOMs**, and **schematics**—with an AI copilot that **searches the web**, **fills your parts database**, and **places real catalog parts** on the canvas before it drafts connectivity.
+**You describe the board. AI builds it. You edit the result.**
 
-[![CI](https://github.com/Afnanksalal/tokito/actions/workflows/ci.yml/badge.svg)](https://github.com/Afnanksalal/tokito/actions/workflows/ci.yml)
+Desktop schematic studio and HTTP API: AI researches parts, drafts BOM and schematic, then you refine on the canvas.
 
----
+## Features
 
-## Why Tokito
+- **AI build** — describe the design goal; xAI plans → Firecrawl research → part resolution → grounded schematic and BOM (review before apply)
+- **Schematic editor** — native egui canvas: place symbols, wire, labels, ERC, undo/redo, multi-sheet document model
+- **Catalog** — manufacturers, parts, BOM lines in PostgreSQL
+- **Exports** — JSON design bundle, BOM CSV, connectivity netlist, S-expression netlist, SVG, PDF, MCAD handoff
+- **Distributor search** — LCSC and optional Nexar for package/footprint hints (`GET /v1/catalog/search`)
 
-| Problem | How Tokito approaches it |
-|--------|---------------------------|
-| LLMs invent parts that don’t exist | Pipeline **resolves MPNs** and writes **manufacturers + parts + BOM** in Postgres before schematic JSON |
-| No provenance for “datasheet facts” | **Firecrawl** search results stored as **`design_research_artifacts`** (markdown excerpts + URLs) |
-| Schematic JSON disconnected from procurement | Every placed instance is tied to **`part_id`** from the BOM when the copilot path runs |
+### How AI build fits together
 
----
+```mermaid
+flowchart LR
+  U[Your prompt] --> PL[xAI plan]
+  PL --> FC[Firecrawl research]
+  FC --> BOM[Part resolution · BOM]
+  BOM --> SCH[Schematic draft]
+  SCH --> REV[You review in Build]
+  REV --> EDIT[Edit on canvas]
+```
 
-## What you can do
+## Windows app (no command line)
 
-- **Describe a circuit** in plain language → run **Generate** (native) or **`POST …/schematic/suggest`** (API).
-- **Edit** the graph like a lightweight CAD tool: grid snap, rotate symbols, undo/redo, save to Postgres.
-- **Search** your parts catalog and **drop** components onto the canvas.
-- **Export** design snapshots (JSON), BOM CSV, or a text netlist for downstream tools.
-- **Integrate** via **`/v1`** REST for automation, CI, or a custom UI.
+**Requirements to build:** Rust 1.88+, [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) (C++ workload).
 
----
+```powershell
+.\scripts\package-windows.ps1
+```
 
-## Copilot pipeline (the heart of Generate)
+Open `dist\Tokito\Tokito.exe`. Keep the `assets` folder next to the executable.
 
-One button runs **six stages** end-to-end—no separate “search first” step in the UI:
+Data lives in **embedded PostgreSQL** (pg-embed, no Docker or cloud DB). Files are under `%LOCALAPPDATA%\tokito\postgres\`. The first run may download database binaries once (network required).
 
-1. **Intent** — Your prompt is saved as the design’s build goal (`design_intents`).
-2. **Plan (xAI)** — Model proposes Firecrawl **search queries** and **candidate MPNs** for the topology.
-3. **Research (Firecrawl)** — Each query runs as **web search**; hits become **`design_research_artifacts`** (excerpt text + source metadata).
-4. **Resolve (xAI)** — Model maps excerpts + candidates to **concrete parts** (MPN, manufacturer, qty, notes).
-5. **Catalog + BOM** — Rows upserted into **`manufacturers`**, **`parts`**, then **`bom_lines`** replace for this design (validated `part_id`s).
-6. **Schematic (xAI)** — Draft **`ReplaceSchematic`** using **only BOM part UUIDs**—no orphan fantasy parts when the BOM is populated.
+**Before you build a board:** copy `dist\Tokito\.env.example` to `.env` beside the exe and set `TOKITO_XAI_API_KEY` and `TOKITO_FIRECRAWL_API_KEY`.
 
-**Required for this path:** `TOKITO_XAI_API_KEY` and `TOKITO_FIRECRAWL_API_KEY`. Optional **`POST …/research/scrape`** and **`…/research/search`** remain for scripts or manual ingestion.
-
-Details: [`docs/API.md`](docs/API.md) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
-
----
-
-## Quick start
-
-**Stack:** Rust **1.74+**, PostgreSQL **14+** (CI uses 16). Docker optional for Postgres via [`docker-compose.yml`](docker-compose.yml).
-
-### Desktop app (recommended)
+## Developer quick start
 
 ```bash
 cp .env.example .env
-# Set TOKITO_DATABASE_URL; for Generate also set TOKITO_XAI_API_KEY + TOKITO_FIRECRAWL_API_KEY
-
-docker compose up -d postgres   # optional
-
+# Set TOKITO_XAI_API_KEY and TOKITO_FIRECRAWL_API_KEY — required for Build
 cargo run -p tokito-native
 ```
 
-On first launch the app migrates the schema and provisions a **local single-user** account for offline-style use.
+Bundled symbols live under [`assets/base-symbols/`](assets/base-symbols/) (CC-BY-SA 4.0). Regenerate with:
 
-#### Studio UI quick tips
+```bash
+cargo run -p tokito-native --bin generate-base-symbols
+```
 
-- **Dockable panels**: Canvas, Copilot, Inspector, BOM, Parts, Console (drag tabs to rearrange).
-- **Tools**: `Q` select · `W` wire · `H` pan
-- **View**: mouse wheel zoom · `Home` zoom-to-fit · `G` grid · `S` snap
-- **Edit**: `Del` delete selection · `Esc` cancel wiring · `Ctrl/⌘+Z` undo · `Ctrl/⌘+Y` redo · Save/Reload buttons
-
-### HTTP API only
+### HTTP API
 
 ```bash
 cargo run -p tokito
-```
-
-Listens on **`TOKITO_HTTP_ADDR`** (default `0.0.0.0:8080`). Health:
-
-```bash
 curl -s http://localhost:8080/health
 ```
 
-Optional: serve a built SPA from disk:
+Default bind: `TOKITO_HTTP_ADDR` (`0.0.0.0:8080`). Optional static SPA: `TOKITO_STATIC_DIR=/path/to/dist`.
 
-```bash
-TOKITO_STATIC_DIR=/path/to/dist cargo run -p tokito
+### Studio shortcuts
+
+| Action | Key |
+|--------|-----|
+| Select | Q |
+| Wire | W |
+| Pan | H |
+| Grid | G (toolbar) |
+| Snap | S (toolbar) |
+| Zoom fit | Home |
+| Undo / Redo | Ctrl+Z / Ctrl+Y |
+| Build schematic | Ctrl/⌘+Enter |
+| Command palette | Ctrl+Shift+P |
+
+## Configuration
+
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `TOKITO_XAI_API_KEY` | **yes** (Build) | xAI — plan, part resolution, schematic draft |
+| `TOKITO_FIRECRAWL_API_KEY` | **yes** (Build) | Web search / datasheet research |
+| `TOKITO_EMBEDDED_PORT` | no | Embedded Postgres TCP port (default `15432`) |
+| `TOKITO_JWT_SECRET` | release | JWT signing for `/v1` (dev default only in debug builds) |
+| `TOKITO_NEXAR_CLIENT_ID` / `SECRET` | no | Nexar package data in catalog search |
+| `TOKITO_LCSC_ANONYMOUS_SEARCH` | no | LCSC catalog search (default on) |
+| `TOKITO_CORS_ORIGINS` | no | Comma-separated origins; empty = permissive dev |
+
+See [`.env.example`](.env.example) for the full list.
+
+## AI build pipeline
+
+Same stages as **[`POST /v1/designs/:id/schematic/suggest`](docs/API.md#post-v1designsidschematicsuggest)** in the API.
+
+```mermaid
+flowchart TD
+  S1[1. Persist intent from prompt] --> S2[2. xAI: Firecrawl queries + candidate MPNs]
+  S2 --> S3[3. Firecrawl → design_research_artifacts]
+  S3 --> S4[4. xAI → manufacturers, parts, bom_lines]
+  S4 --> S5[5. xAI → ReplaceSchematic<br/>BOM part_id strict]
+  S5 --> S6[6. Review in Build → apply → canvas]
 ```
 
----
-
-## Configuration (high level)
-
-| Variable | Role |
-|----------|------|
-| `TOKITO_DATABASE_URL` | **Required.** Postgres connection string. |
-| `TOKITO_HTTP_ADDR` | API bind address (API binary only). |
-| `TOKITO_DB_MAX_CONNECTIONS` | Pool size (default `10`). |
-| `TOKITO_JWT_SECRET` | Sign JWTs for `/v1` API auth—**set in production**. |
-| `TOKITO_XAI_API_KEY` | Grok / OpenAI-compatible chat for copilot stages. |
-| `TOKITO_FIRECRAWL_API_KEY` | Web search + scrape for research artifacts. |
-| `TOKITO_CORS_ORIGINS` | Browser origins for the API; empty = permissive dev mode. |
-| `TOKITO_STATIC_DIR` | Optional static assets + SPA fallback for `/app`. |
-
-Full reference: [`.env.example`](.env.example) (Nexar, LCSC, agent limits, integration tests).
-
----
-
-## API at a glance
-
-| Area | Examples |
-|------|-----------|
-| Catalog | `GET/POST /v1/manufacturers`, `GET/POST /v1/parts`, `GET /v1/parts/:id` |
-| Designs | `POST /v1/designs`, `GET/PATCH /v1/designs/:id`, `GET …/export` |
-| BOM | `GET/PUT /v1/designs/:id/bom` |
-| Schematic | `GET/PUT …/schematic`, `GET/PUT …/schematic/document`, **`POST …/schematic/suggest`** (full pipeline), `POST …/schematic/validate` |
-| Copilot data | `GET/PUT …/intent`, `GET …/research`, `POST …/research/scrape`, `POST …/research/search` |
-
-Authoritative request/response shapes: **[`docs/API.md`](docs/API.md)**
-
----
+Deep dive: [`docs/API.md`](docs/API.md), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Repository layout
 
-```
-tokito/
-├── native/           # egui desktop — tokito-native
-├── src/              # Library + API — handlers, store, services (design_pipeline, schematic_gen, …)
-├── migrations/       # SQLx migrations (applied on startup)
-├── docs/             # API, architecture, roadmap
-├── tests/            # Integration tests (Postgres)
-├── Dockerfile
-├── docker-compose.yml
-├── LICENSE-MIT
-├── CONTRIBUTING.md · SECURITY.md
-└── README.md         # you are here
+```mermaid
+flowchart TB
+  R(["tokito/"])
+  R --> N["native/ — egui desktop · tokito-native"]
+  R --> S["src/ — library + Axum API"]
+  R --> M["migrations/ — SQLx"]
+  R --> A["assets/ — bundled .tokito_sym"]
+  R --> D["docs/ — API + architecture"]
+  R --> T["tests/ — integration + golden"]
 ```
 
----
-
-## Testing & CI
+## Testing
 
 ```bash
 cargo fmt --all -- --check
@@ -144,44 +125,19 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Integration test (requires Postgres + `TOKITO_TEST_DATABASE_URL`):
+API integration tests start embedded PostgreSQL (pg-embed may download binaries on first run). They run in CI automatically; locally opt in with:
 
 ```bash
-cargo test -p tokito --test integration -- --ignored --nocapture
+# Linux/macOS
+TOKITO_RUN_DB_INTEGRATION=1 cargo test -p tokito --test api_designs --test api_parts --test api_schematic
+
+# PowerShell
+$env:TOKITO_RUN_DB_INTEGRATION = '1'
+cargo test -p tokito --test api_designs --test api_parts --test api_schematic
 ```
 
-GitHub Actions runs format, clippy, unit tests, and the integration job against Postgres 16.
-
----
-
-## Contributing & security
-
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** — workflow, PR checklist, license on contributions.
-- **[SECURITY.md](SECURITY.md)** — responsible disclosure (avoid public issues for undisclosed vulns).
-
----
-
-## Tech stack
-
-- **Rust**, **Axum**, **SQLx**, **PostgreSQL**, **Tokio**
-- **egui** / **eframe** for the native shell
-- **xAI** (OpenAI-compatible) · **Firecrawl** for search/scrape
-
----
+Default `cargo test --workspace` still runs all tests that do not need DB extraction (unit tests, golden exports).
 
 ## License
 
-Licensed under the **MIT License**. See [`LICENSE-MIT`](LICENSE-MIT).
-
-Unless you say otherwise, contributions you submit are accepted under the same terms.
-
----
-
-## More documentation
-
-| Doc | Contents |
-|-----|----------|
-| [`docs/README.md`](docs/README.md) | Index of technical docs |
-| [`docs/API.md`](docs/API.md) | REST reference |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Layers, data model, ops |
-| [`docs/PRODUCT_PLAN.md`](docs/PRODUCT_PLAN.md) | Roadmap and delivery stages |
+MIT — see [`LICENSE`](LICENSE).

@@ -1,49 +1,31 @@
-//! Egui application state and Tokito integration (DB, copilot, schematic ops).
+//! Egui application state and Tokito integration (DB, AI build, schematic ops).
 
 use anyhow::Context;
 use eframe::egui;
-use egui::{Pos2, Rect, Sense, Stroke, Vec2};
-use egui_dock::{DockArea, Style as DockStyle};
-use sqlx::postgres::PgPoolOptions;
+use egui::Pos2;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Receiver;
 use tokito::models::{
-    DocumentBusSegment, DocumentJunction, DocumentNetLabel, DocumentNoConnect, DocumentPin,
-    DocumentPoint, DocumentPowerSymbol, DocumentSymbol, DocumentTextItem, DocumentWireSegment,
-    ElectricalPinType, ErcViolation, MirrorMode, NetLabelKind, PartSearchParams, PinOrientation,
-    ReplaceSchematic, SchematicDocument,
+    ErcViolation, PartSearchParams, ReplaceSchematic, SchematicDocument, SchematicEditBatch,
 };
 use tokito::router::AppState;
 use tokito::store::intent;
 use uuid::Uuid;
 
 use crate::bootstrap::ensure_local_user;
-use crate::canvas::{
-    display_pins_for_symbol, manhattan_bends, route_segments, snap_world_pos, symbol_pin_world,
-    BusSegment, CanvasSnapshot, Junction, NetLabel, NoConnect, PinEndpoint, PowerSymbol, Sym,
-    TextItem, Viewport, Wire, CANVAS_UNDO_CAP,
-};
+use crate::canvas::{manhattan_bends, snap_world_pos, symbol_pin_world, PinEndpoint, Sym, Wire};
+use crate::editor::PlaceSymbolRequest;
+use crate::editor::{document, CanvasTool, SchematicEditor};
 use crate::util::{guess_prefix, next_refdes};
 
-type SchematicGenerationRx = Receiver<Result<(ReplaceSchematic, Vec<ErcViolation>), String>>;
+type SchematicGenerationRx =
+    Receiver<Result<(ReplaceSchematic, Vec<ErcViolation>, SchematicEditBatch), String>>;
 
 pub mod studio_dock;
 
-use studio_dock::StudioTab;
+mod studio;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum CanvasTool {
-    #[default]
-    Select,
-    Wire,
-    NetLabel,
-    Power,
-    Junction,
-    NoConnect,
-    Bus,
-    Text,
-    Pan,
-}
+use studio_dock::StudioTab;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ProjectsSort {
@@ -59,6 +41,21 @@ pub struct PartRow {
     pub id: Uuid,
     pub mpn: String,
     pub description: Option<String>,
+    pub package_name: Option<String>,
+}
+
+/// External catalog hit (LCSC / Nexar) before importing to local parts table.
+#[derive(Clone)]
+pub struct CatalogHit {
+    pub mpn: String,
+    pub manufacturer: Option<String>,
+    pub description: Option<String>,
+    pub package_name: Option<String>,
+    pub footprint_hint: Option<String>,
+    pub datasheet_url: Option<String>,
+    pub distributor: String,
+    pub sku: String,
+    pub product_url: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -68,6 +65,7 @@ pub enum Route {
 }
 
 pub struct App {
+    _embedded_db: tokito::db::EmbeddedPostgres,
     rt: tokio::runtime::Runtime,
     pool: sqlx::PgPool,
     state: AppState,
@@ -83,39 +81,20 @@ pub struct App {
     new_design_desc: String,
 
     design: Option<tokito::models::Design>,
-    parts_query: String,
+    /// Unified place-browser query (symbols + parts catalog).
+    place_query: String,
+    place_scope: studio::PlaceScope,
+    /// Full multi-sheet document cache while in studio.
+    studio_document: Option<SchematicDocument>,
+    studio_dirty: bool,
     parts_hits: Vec<PartRow>,
+    catalog_hits: Vec<CatalogHit>,
     part_cache: HashMap<Uuid, String>, // part_id -> mpn
 
-    viewport: Viewport,
-    symbols: Vec<Sym>,
-    wires: Vec<Wire>,
-    net_labels: Vec<NetLabel>,
-    junctions: Vec<Junction>,
-    no_connects: Vec<NoConnect>,
-    power_symbols: Vec<PowerSymbol>,
-    text_items: Vec<TextItem>,
-    buses: Vec<BusSegment>,
-    selected_sym: Option<String>,
-    selected_wire: Option<usize>,
-    selected_wire_bend: Option<usize>,
-    selected_net_label: Option<usize>,
-    selected_junction: Option<usize>,
-    selected_no_connect: Option<usize>,
-    selected_power_symbol: Option<usize>,
-    selected_text_item: Option<usize>,
-    selected_bus: Option<usize>,
-    dragging_sym: Option<String>,
-    dragging_wire_bend: Option<(usize, usize)>,
-    wire_drag_from: Option<PinEndpoint>,
-    /// Last canvas panel rect in screen space (for placing parts in view).
-    canvas_screen_rect: Option<Rect>,
+    editor: SchematicEditor,
 
     prompt: String,
     prompt_busy: bool,
-
-    canvas_undo: Vec<CanvasSnapshot>,
-    canvas_redo: Vec<CanvasSnapshot>,
 
     /// Refresh project list when switching back from Studio (and once on startup).
     projects_need_refresh: bool,
@@ -134,16 +113,6 @@ pub struct App {
     bom_loaded_for: Option<Uuid>,
     bom_dirty: bool,
 
-    /// Canvas tool mode (CAD toolbar).
-    canvas_tool: CanvasTool,
-    show_grid: bool,
-    snap_enabled: bool,
-    /// Default net name for new wires.
-    new_wire_net: String,
-    /// Symbol under pointer (hover highlight).
-    canvas_hovered_sym: Option<String>,
-    /// Zoom-to-fit after layout (Home / toolbar).
-    pending_zoom_fit: bool,
     /// Focus mode hides dock chrome and gives the schematic canvas the workspace.
     canvas_focus_mode: bool,
 
@@ -153,12 +122,33 @@ pub struct App {
     projects_pinned: HashSet<Uuid>,
     recent_design_ids: Vec<Uuid>,
 
-    /// Optional external symbol provider (KiCad `.kicad_sym`).
-    kicad_symbols: Option<crate::kicad_symbols::KicadSymbolLibrary>,
+    base_symbols: Option<crate::base_symbols::BaseSymbolLibrary>,
+
+    /// ERC violations for Messages panel + navigation.
+    erc_violations: Vec<ErcViolation>,
+
+    /// Pending AI build edits awaiting user approval before they land on the canvas.
+    pending_edit_batch: Option<SchematicEditBatch>,
+    pending_edit_selected: Vec<bool>,
+
+    /// Both TOKITO_XAI_API_KEY and TOKITO_FIRECRAWL_API_KEY are set (required to Build).
+    ai_build_ready: bool,
+
+    command_palette_open: bool,
+    command_palette_query: String,
+
+    /// Symbol import path typed in Place panel.
+    symbol_import_path: String,
+
+    mcad_viewer: crate::mcad_viewer::McadViewer,
 }
 
 impl App {
     pub fn try_new() -> anyhow::Result<Self> {
+        let env_beside_exe = crate::paths::exe_dir().join(".env");
+        if env_beside_exe.is_file() {
+            dotenvy::from_path(&env_beside_exe).ok();
+        }
         dotenvy::dotenv().ok();
         tracing_subscriber::fmt()
             .with_env_filter(
@@ -168,30 +158,21 @@ impl App {
             .init();
 
         let cfg = tokito::config::load()?;
+        let ai_build_ready = cfg.xai.is_some() && cfg.firecrawl.is_some();
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .context("tokio runtime")?;
-        let pool = rt
-            .block_on(async {
-                PgPoolOptions::new()
-                    .max_connections(cfg.db_max_connections)
-                    .connect(&cfg.database_url)
-                    .await
-            })
-            .context("connect database")?;
-        rt.block_on(async { sqlx::migrate!("../migrations").run(&pool).await })
-            .context("migrations")?;
+        let (pool, embedded) = rt.block_on(tokito::db::connect(&cfg)).context("database")?;
 
         let state = AppState::try_new(pool.clone(), &cfg)?;
 
         let user_id = rt.block_on(async { ensure_local_user(&pool).await })?;
 
-        let kicad_symbols = std::env::var("TOKITO_KICAD_SYM_LIB")
-            .ok()
-            .and_then(|p| crate::kicad_symbols::KicadSymbolLibrary::try_load(p).ok());
+        let base_symbols = crate::base_symbols::BaseSymbolLibrary::open().ok();
 
         Ok(Self {
+            _embedded_db: embedded,
             rt,
             pool,
             state,
@@ -203,426 +184,123 @@ impl App {
             new_design_name: "New design".to_string(),
             new_design_desc: "".to_string(),
             design: None,
-            parts_query: "".to_string(),
+            place_query: String::new(),
+            place_scope: studio::PlaceScope::default(),
+            studio_document: None,
+            studio_dirty: false,
             parts_hits: vec![],
+            catalog_hits: vec![],
             part_cache: HashMap::new(),
-            viewport: Viewport {
-                pan: egui::Vec2::new(40.0, 40.0),
-                zoom: 1.0,
-            },
-            symbols: vec![],
-            wires: vec![],
-            net_labels: vec![],
-            junctions: vec![],
-            no_connects: vec![],
-            power_symbols: vec![],
-            text_items: vec![],
-            buses: vec![],
-            selected_sym: None,
-            selected_wire: None,
-            selected_wire_bend: None,
-            selected_net_label: None,
-            selected_junction: None,
-            selected_no_connect: None,
-            selected_power_symbol: None,
-            selected_text_item: None,
-            selected_bus: None,
-            dragging_sym: None,
-            dragging_wire_bend: None,
-            wire_drag_from: None,
-            canvas_screen_rect: None,
+            editor: SchematicEditor::default(),
             prompt: "".to_string(),
             prompt_busy: false,
-            canvas_undo: vec![],
-            canvas_redo: vec![],
             projects_need_refresh: true,
             generation_rx: None,
-            dock_state: egui_dock::DockState::new(StudioTab::ALL.into_iter().collect()),
+            dock_state: studio_dock::default_studio_dock(),
             console_lines: vec![],
             bom_lines: vec![],
             bom_loaded_for: None,
             bom_dirty: true,
-            canvas_tool: CanvasTool::default(),
-            show_grid: true,
-            snap_enabled: true,
-            new_wire_net: "NET".to_string(),
-            canvas_hovered_sym: None,
-            pending_zoom_fit: false,
             canvas_focus_mode: false,
             projects_search: String::new(),
             projects_sort: ProjectsSort::default(),
             projects_pinned: HashSet::new(),
             recent_design_ids: vec![],
-            kicad_symbols,
+            base_symbols,
+            erc_violations: vec![],
+            pending_edit_batch: None,
+            pending_edit_selected: vec![],
+            ai_build_ready,
+            command_palette_open: false,
+            command_palette_query: String::new(),
+            symbol_import_path: String::new(),
+            mcad_viewer: crate::mcad_viewer::McadViewer::default(),
         })
     }
 
-    fn snapshot_canvas(&self) -> CanvasSnapshot {
-        CanvasSnapshot {
-            symbols: self.symbols.clone(),
-            wires: self.wires.clone(),
-            net_labels: self.net_labels.clone(),
-            junctions: self.junctions.clone(),
-            no_connects: self.no_connects.clone(),
-            power_symbols: self.power_symbols.clone(),
-            text_items: self.text_items.clone(),
-            buses: self.buses.clone(),
+    pub(crate) fn suggest_erc_fixes(&mut self) {
+        let doc = self.graph_to_document();
+        let batch = tokito::services::erc_fixes::propose_fixes(&doc, &self.erc_violations);
+        if batch.ops.is_empty() {
+            self.log_console("No automatic ERC fixes available.".to_string());
+            return;
+        }
+        let n = batch.ops.len();
+        self.pending_edit_batch = Some(batch);
+        self.pending_edit_selected = vec![true; n];
+        self.log_console("ERC fix suggestions ready in Build — review and apply.".to_string());
+    }
+
+    pub(crate) fn import_symbol_library_folder(&mut self) {
+        let path = self.symbol_import_path.trim();
+        if path.is_empty() {
+            self.set_err("Enter a folder path containing .tokito_sym files.");
+            return;
+        }
+        match crate::symbol_library::import_folder(std::path::Path::new(path)) {
+            Ok(n) => {
+                self.base_symbols = crate::base_symbols::BaseSymbolLibrary::open().ok();
+                self.err = None;
+                self.log_console(format!(
+                    "Imported {n} symbols — restart search or reload Place panel."
+                ));
+            }
+            Err(e) => self.set_err(format!("Import failed: {e}")),
         }
     }
 
     fn before_canvas_edit(&mut self) {
-        self.canvas_undo.push(self.snapshot_canvas());
-        while self.canvas_undo.len() > CANVAS_UNDO_CAP {
-            self.canvas_undo.remove(0);
+        self.editor.before_edit();
+        self.studio_dirty = true;
+        self.mcad_viewer.invalidate();
+    }
+
+    pub(crate) fn flush_studio_document(&mut self) {
+        let doc = self
+            .studio_document
+            .get_or_insert_with(SchematicDocument::empty);
+        document::export_document(&self.editor, &self.part_cache, doc);
+    }
+
+    pub(crate) fn switch_active_sheet(&mut self, sheet_id: String) {
+        if self.editor.active_sheet_id == sheet_id {
+            return;
         }
-        self.canvas_redo.clear();
+        self.flush_studio_document();
+        self.editor.active_sheet_id = sheet_id.clone();
+        if let Some(doc) = self.studio_document.clone() {
+            crate::editor::sheets::hydrate_active_sheet(&mut self.editor, &doc, &sheet_id);
+        }
+        self.studio_dirty = true;
+    }
+
+    fn graph_to_document(&mut self) -> SchematicDocument {
+        self.flush_studio_document();
+        self.studio_document
+            .clone()
+            .unwrap_or_else(SchematicDocument::empty)
     }
 
     fn undo_canvas(&mut self) {
-        if self.canvas_undo.is_empty() {
-            return;
-        }
-        let prev = self.canvas_undo.pop().unwrap();
-        let cur = self.snapshot_canvas();
-        self.canvas_redo.push(cur);
-        self.symbols = prev.symbols;
-        self.wires = prev.wires;
-        self.net_labels = prev.net_labels;
-        self.junctions = prev.junctions;
-        self.no_connects = prev.no_connects;
-        self.power_symbols = prev.power_symbols;
-        self.text_items = prev.text_items;
-        self.buses = prev.buses;
+        self.editor.undo();
     }
 
     fn redo_canvas(&mut self) {
-        if self.canvas_redo.is_empty() {
-            return;
-        }
-        let next = self.canvas_redo.pop().unwrap();
-        let cur = self.snapshot_canvas();
-        self.canvas_undo.push(cur);
-        self.symbols = next.symbols;
-        self.wires = next.wires;
-        self.net_labels = next.net_labels;
-        self.junctions = next.junctions;
-        self.no_connects = next.no_connects;
-        self.power_symbols = next.power_symbols;
-        self.text_items = next.text_items;
-        self.buses = next.buses;
+        self.editor.redo();
     }
 
     fn clear_canvas_selection(&mut self) {
-        self.selected_sym = None;
-        self.selected_wire = None;
-        self.selected_wire_bend = None;
-        self.selected_net_label = None;
-        self.selected_junction = None;
-        self.selected_no_connect = None;
-        self.selected_power_symbol = None;
-        self.selected_text_item = None;
-        self.selected_bus = None;
+        self.editor.clear_selection();
     }
 
     fn apply_document_to_canvas(&mut self, doc: SchematicDocument) {
-        self.symbols = doc
-            .symbols
-            .iter()
-            .map(|s| Sym {
-                ref_des: s.ref_des.clone(),
-                part_id: s.part_id,
-                pos: snap_world_pos(Pos2::new(s.position.x as f32, s.position.y as f32)),
-                rotation_deg: s.rotation as f32,
-                pins: s.pins.iter().map(|p| p.name.clone()).collect(),
-            })
-            .collect();
-
-        let mut symbols_by_id: HashMap<Uuid, String> = HashMap::new();
-        for symbol in &doc.symbols {
-            symbols_by_id.insert(symbol.id, symbol.ref_des.clone());
-        }
-
-        self.wires = doc
-            .wire_segments
-            .chunks(2)
-            .enumerate()
-            .filter_map(|(idx, chunk)| {
-                let start = chunk.first()?.start;
-                let end = chunk.last()?.end;
-                let a =
-                    self.nearest_symbol_pin_to_world(Pos2::new(start.x as f32, start.y as f32))?;
-                let b = self.nearest_symbol_pin_to_world(Pos2::new(end.x as f32, end.y as f32))?;
-                if a == b {
-                    return None;
-                }
-                Some(Wire {
-                    a: a.ref_des,
-                    a_pin: a.pin_name,
-                    b: b.ref_des,
-                    b_pin: b.pin_name,
-                    net: chunk
-                        .first()
-                        .and_then(|s| s.net_name.clone())
-                        .unwrap_or_else(|| format!("N${}", idx + 1)),
-                    bends: chunk
-                        .iter()
-                        .map(|s| Pos2::new(s.end.x as f32, s.end.y as f32))
-                        .take(chunk.len().saturating_sub(1))
-                        .collect(),
-                })
-            })
-            .collect();
-
-        self.net_labels = doc
-            .net_labels
-            .into_iter()
-            .map(|l| NetLabel {
-                name: l.name,
-                pos: Pos2::new(l.position.x as f32, l.position.y as f32),
-            })
-            .collect();
-        self.junctions = doc
-            .junctions
-            .into_iter()
-            .map(|j| Junction {
-                pos: Pos2::new(j.position.x as f32, j.position.y as f32),
-            })
-            .collect();
-        self.no_connects = doc
-            .no_connects
-            .into_iter()
-            .map(|n| NoConnect {
-                pos: Pos2::new(n.position.x as f32, n.position.y as f32),
-            })
-            .collect();
-        self.power_symbols = doc
-            .power_symbols
-            .into_iter()
-            .map(|p| PowerSymbol {
-                name: p.name,
-                pos: Pos2::new(p.position.x as f32, p.position.y as f32),
-            })
-            .collect();
-        self.text_items = doc
-            .text_items
-            .into_iter()
-            .map(|t| TextItem {
-                text: t.text,
-                pos: Pos2::new(t.position.x as f32, t.position.y as f32),
-            })
-            .collect();
-        self.buses = doc
-            .buses
-            .into_iter()
-            .map(|b| BusSegment {
-                name: b.name,
-                start: Pos2::new(b.start.x as f32, b.start.y as f32),
-                end: Pos2::new(b.end.x as f32, b.end.y as f32),
-            })
-            .collect();
-    }
-
-    fn nearest_symbol_pin_to_world(&self, world: Pos2) -> Option<PinEndpoint> {
-        let mut best: Option<(PinEndpoint, f32)> = None;
-        for sym in &self.symbols {
-            for pin_name in display_pins_for_symbol(sym, &self.wires) {
-                let pin_world = symbol_pin_world(sym, &pin_name);
-                let dist = pin_world.distance(world);
-                if dist <= 18.0 && best.as_ref().map(|(_, d)| dist < *d).unwrap_or(true) {
-                    best = Some((
-                        PinEndpoint {
-                            ref_des: sym.ref_des.clone(),
-                            pin_name,
-                        },
-                        dist,
-                    ));
-                }
-            }
-        }
-        best.map(|(pin, _)| pin)
-    }
-
-    fn endpoint_world(&self, endpoint: &PinEndpoint) -> Option<Pos2> {
-        let sym = self
-            .symbols
-            .iter()
-            .find(|s| s.ref_des == endpoint.ref_des)?;
-        Some(symbol_pin_world(sym, &endpoint.pin_name))
-    }
-
-    fn graph_to_document(&self) -> SchematicDocument {
-        let mut doc = SchematicDocument::empty();
-        doc.symbols = self
-            .symbols
-            .iter()
-            .map(|s| {
-                let pin_names = display_pins_for_symbol(s, &self.wires);
-                DocumentSymbol {
-                    id: Uuid::new_v4(),
-                    sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
-                    part_id: s.part_id,
-                    symbol_id: Some("tokito:generic".to_string()),
-                    ref_des: s.ref_des.clone(),
-                    value: self
-                        .part_cache
-                        .get(&s.part_id.unwrap_or_else(Uuid::nil))
-                        .cloned(),
-                    position: DocumentPoint {
-                        x: s.pos.x as f64,
-                        y: s.pos.y as f64,
-                    },
-                    rotation: s.rotation_deg as f64,
-                    mirror: MirrorMode::None,
-                    fields: Default::default(),
-                    footprint_ref: None,
-                    pins: pin_names
-                        .into_iter()
-                        .map(|pin_name| {
-                            let right_side = matches!(
-                                pin_name.trim().to_ascii_lowercase().as_str(),
-                                "2" | "b" | "out" | "vout" | "sda" | "scl" | "tx" | "miso"
-                            ) || pin_name.ends_with("_b");
-                            DocumentPin {
-                                number: Some(pin_name.clone()),
-                                name: pin_name,
-                                electrical_type: ElectricalPinType::Unspecified,
-                                offset: DocumentPoint {
-                                    x: if right_side { 70.0 } else { -70.0 },
-                                    y: 0.0,
-                                },
-                                orientation: if right_side {
-                                    PinOrientation::Right
-                                } else {
-                                    PinOrientation::Left
-                                },
-                                visible: true,
-                            }
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
-
-        for w in &self.wires {
-            let route = match (
-                self.endpoint_world(&PinEndpoint {
-                    ref_des: w.a.clone(),
-                    pin_name: w.a_pin.clone(),
-                }),
-                self.endpoint_world(&PinEndpoint {
-                    ref_des: w.b.clone(),
-                    pin_name: w.b_pin.clone(),
-                }),
-            ) {
-                (Some(a), Some(b)) => route_segments(a, &w.bends, b),
-                _ => vec![],
-            };
-            for (start, end) in route {
-                doc.wire_segments.push(DocumentWireSegment {
-                    id: Uuid::new_v4(),
-                    sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
-                    start: DocumentPoint {
-                        x: start.x as f64,
-                        y: start.y as f64,
-                    },
-                    end: DocumentPoint {
-                        x: end.x as f64,
-                        y: end.y as f64,
-                    },
-                    net_name: Some(w.net.clone()),
-                });
-            }
-        }
-
-        doc.net_labels = self
-            .net_labels
-            .iter()
-            .map(|l| DocumentNetLabel {
-                id: Uuid::new_v4(),
-                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
-                name: l.name.clone(),
-                kind: NetLabelKind::Local,
-                position: DocumentPoint {
-                    x: l.pos.x as f64,
-                    y: l.pos.y as f64,
-                },
-                orientation: PinOrientation::Right,
-            })
-            .collect();
-        doc.junctions = self
-            .junctions
-            .iter()
-            .map(|j| DocumentJunction {
-                id: Uuid::new_v4(),
-                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
-                position: DocumentPoint {
-                    x: j.pos.x as f64,
-                    y: j.pos.y as f64,
-                },
-            })
-            .collect();
-        doc.no_connects = self
-            .no_connects
-            .iter()
-            .map(|n| DocumentNoConnect {
-                id: Uuid::new_v4(),
-                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
-                position: DocumentPoint {
-                    x: n.pos.x as f64,
-                    y: n.pos.y as f64,
-                },
-            })
-            .collect();
-        doc.power_symbols = self
-            .power_symbols
-            .iter()
-            .map(|p| DocumentPowerSymbol {
-                id: Uuid::new_v4(),
-                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
-                name: p.name.clone(),
-                position: DocumentPoint {
-                    x: p.pos.x as f64,
-                    y: p.pos.y as f64,
-                },
-            })
-            .collect();
-        doc.text_items = self
-            .text_items
-            .iter()
-            .map(|t| DocumentTextItem {
-                id: Uuid::new_v4(),
-                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
-                text: t.text.clone(),
-                position: DocumentPoint {
-                    x: t.pos.x as f64,
-                    y: t.pos.y as f64,
-                },
-                rotation: 0.0,
-            })
-            .collect();
-        doc.buses = self
-            .buses
-            .iter()
-            .map(|b| DocumentBusSegment {
-                id: Uuid::new_v4(),
-                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
-                start: DocumentPoint {
-                    x: b.start.x as f64,
-                    y: b.start.y as f64,
-                },
-                end: DocumentPoint {
-                    x: b.end.x as f64,
-                    y: b.end.y as f64,
-                },
-                name: b.name.clone(),
-            })
-            .collect();
-        doc
+        self.studio_document = Some(doc.clone());
+        document::load_document(&mut self.editor, doc);
+        self.studio_dirty = false;
     }
 
     fn load_prompt_after_open(&mut self, design_id: Uuid) {
-        self.canvas_undo.clear();
-        self.canvas_redo.clear();
+        self.editor.clear_history();
         let pool = self.pool.clone();
         let res = self
             .rt
@@ -751,13 +429,14 @@ impl App {
                 if let Some(doc) = stored_doc {
                     self.apply_document_to_canvas(doc);
                 } else {
-                    self.net_labels.clear();
-                    self.junctions.clear();
-                    self.no_connects.clear();
-                    self.power_symbols.clear();
-                    self.text_items.clear();
-                    self.buses.clear();
-                    self.symbols = sch
+                    self.studio_document = None;
+                    self.editor.net_labels.clear();
+                    self.editor.junctions.clear();
+                    self.editor.no_connects.clear();
+                    self.editor.power_symbols.clear();
+                    self.editor.text_items.clear();
+                    self.editor.buses.clear();
+                    self.editor.symbols = sch
                         .instances
                         .iter()
                         .map(|i| Sym {
@@ -769,6 +448,9 @@ impl App {
                             )),
                             rotation_deg: i.rotation as f32,
                             pins: vec!["1".to_string(), "2".to_string()],
+                            footprint_ref: None,
+                            symbol_id: None,
+                            pin_layout: vec![],
                         })
                         .collect();
 
@@ -804,8 +486,8 @@ impl App {
                             {
                                 let a_pin = w[0].1.clone();
                                 let b_pin = w[1].1.clone();
-                                let a_sym = self.symbols.iter().find(|s| s.ref_des == *a);
-                                let b_sym = self.symbols.iter().find(|s| s.ref_des == *b);
+                                let a_sym = self.editor.symbols.iter().find(|s| s.ref_des == *a);
+                                let b_sym = self.editor.symbols.iter().find(|s| s.ref_des == *b);
                                 let bends = match (a_sym, b_sym) {
                                     (Some(sa), Some(sb)) => manhattan_bends(
                                         symbol_pin_world(sa, &a_pin),
@@ -824,17 +506,22 @@ impl App {
                             }
                         }
                     }
-                    self.wires = wires;
-                    self.net_labels.clear();
-                    self.junctions.clear();
-                    self.no_connects.clear();
+                    self.editor.load_legacy_wires(wires);
+                    self.editor.net_labels.clear();
+                    self.editor.junctions.clear();
+                    self.editor.no_connects.clear();
+                    let mut doc = SchematicDocument::empty();
+                    crate::editor::sheets::flush_active_sheet(
+                        &self.editor,
+                        &mut doc,
+                        &self.part_cache,
+                    );
+                    self.studio_document = Some(doc);
+                    self.studio_dirty = false;
                 }
 
                 self.clear_canvas_selection();
-                self.viewport = Viewport {
-                    pan: egui::Vec2::new(40.0, 40.0),
-                    zoom: 1.0,
-                };
+                self.editor.reset_view();
                 self.load_prompt_after_open(design_id);
                 self.push_recent_design(design_id);
                 self.bom_dirty = true;
@@ -851,10 +538,82 @@ impl App {
         }
     }
 
-    fn save_schematic(&mut self, design_id: Uuid) {
+    pub(crate) fn export_schematic_file(&mut self, kind: &str) {
+        let safe_name = self
+            .design
+            .as_ref()
+            .map(|d| d.name.as_str())
+            .unwrap_or("design")
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect::<String>();
+        let _ = std::fs::create_dir_all("exports");
         let document = self.graph_to_document();
+        let design_id = match self.route {
+            Route::Studio { design_id } => design_id,
+            _ => return,
+        };
+        let result = match kind {
+            "svg" => {
+                let svg = tokito::services::svg_export::document_to_svg(&document);
+                let path = format!("exports/{safe_name}.svg");
+                std::fs::write(&path, svg).map(|_| path)
+            }
+            "netlist" | "sexp_netlist" => {
+                let (replace, _) = document.to_replace_schematic();
+                let view = tokito::models::SchematicView::from_replace(design_id, &replace);
+                let text = if kind == "sexp_netlist" {
+                    tokito::services::sexp_netlist::export(&view)
+                } else {
+                    tokito::services::netlist::connectivity_text(&view)
+                };
+                let ext = if kind == "sexp_netlist" { "net" } else { "txt" };
+                let path = format!("exports/{safe_name}.{ext}");
+                std::fs::write(&path, text).map(|_| path)
+            }
+            "pdf" => {
+                let pdf = tokito::services::pdf_export::document_to_pdf(&document);
+                let path = format!("exports/{safe_name}.pdf");
+                std::fs::write(&path, pdf).map(|_| path)
+            }
+            "mcad" => {
+                let path = format!("exports/{safe_name}_mcad.json");
+                self.write_mcad_handoff_json(&path, &document).map(|_| path)
+            }
+            _ => return,
+        };
+        match result {
+            Ok(path) => {
+                self.err = None;
+                self.log_console(format!("Exported {path}"));
+            }
+            Err(e) => self.set_err(format!("Export failed: {e}")),
+        }
+    }
+
+    fn save_schematic(&mut self, design_id: Uuid) {
+        let mut document = self.graph_to_document();
+        self.studio_dirty = false;
         let (body, document_diagnostics) = document.to_replace_schematic();
-        let warns = tokito::services::schematic_validate::erc_light(&body);
+        let warns = tokito::services::schematic_validate::erc_full(&body, &document);
+        self.erc_violations = warns.clone();
+        document.erc_markers = tokito::services::schematic_validate::violations_to_erc_markers(
+            &warns,
+            tokito::models::DEFAULT_SHEET_ID,
+            (120.0, 80.0),
+        );
+        self.editor.erc_markers = document
+            .erc_markers
+            .iter()
+            .map(|m| crate::editor::ErcMarkerOnCanvas {
+                code: m.code.clone(),
+                message: m.message.clone(),
+                severity: m.severity.clone(),
+                position: Pos2::new(m.position.x as f32, m.position.y as f32),
+                instance_ref: None,
+                net_name: None,
+            })
+            .collect();
         let res = self.rt.block_on(async {
             tokito::store::schematic::replace(&self.pool, design_id, body).await?;
             tokito::store::schematic_document::upsert(&self.pool, design_id, &document).await
@@ -881,10 +640,14 @@ impl App {
     pub(crate) fn poll_async_jobs(&mut self, ctx: &egui::Context) {
         if let Some(rx) = self.generation_rx.take() {
             match rx.try_recv() {
-                Ok(Ok((draft, erc))) => {
+                Ok(Ok((_draft, erc, batch))) => {
                     self.prompt_busy = false;
                     self.generation_rx = None;
-                    self.apply_generated_schematic(draft, &erc);
+                    self.pending_edit_batch = Some(batch);
+                    self.pending_edit_selected = vec![true];
+                    self.erc_violations = erc.clone();
+                    self.set_erc_note_from_slice(&erc);
+                    self.log_console("Build complete — review proposed changes in the Build tab.");
                 }
                 Ok(Err(msg)) => {
                     self.prompt_busy = false;
@@ -915,13 +678,215 @@ impl App {
         }
     }
 
+    pub(crate) fn apply_pending_edit_batch(&mut self) {
+        let Some(batch) = self.pending_edit_batch.take() else {
+            return;
+        };
+        let selected = self.pending_edit_selected.clone();
+        let erc = self.erc_violations.clone();
+        let mut applied = 0usize;
+        let mut any = false;
+        for (_op, on) in batch.ops.iter().zip(selected.iter()) {
+            if *on {
+                any = true;
+                break;
+            }
+        }
+        if !any {
+            self.pending_edit_selected.clear();
+            self.log_console("No build edits selected.".to_string());
+            return;
+        }
+        self.before_canvas_edit();
+        for (op, on) in batch.ops.into_iter().zip(selected.into_iter()) {
+            if !on {
+                continue;
+            }
+            match op {
+                tokito::models::SchematicEditOp::ReplaceSchematic { schematic, .. } => {
+                    self.apply_generated_schematic(schematic, &erc, false);
+                    applied += 1;
+                }
+                tokito::models::SchematicEditOp::AddInstance {
+                    ref_des,
+                    part_id,
+                    position,
+                    rotation,
+                    ..
+                } => {
+                    let prefix: String = ref_des
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphabetic())
+                        .collect();
+                    let prefix = if prefix.is_empty() {
+                        "U".to_string()
+                    } else {
+                        prefix
+                    };
+                    let (symbol_id, pin_layout) =
+                        self.resolve_symbol_for_instance(part_id, &prefix);
+                    let pins: Vec<String> = if pin_layout.is_empty() {
+                        vec!["1".into(), "2".into()]
+                    } else {
+                        pin_layout.iter().map(|(n, _, _)| n.clone()).collect()
+                    };
+                    self.editor.symbols.push(Sym {
+                        ref_des: ref_des.clone(),
+                        part_id,
+                        pos: snap_world_pos(Pos2::new(position.x as f32, position.y as f32)),
+                        rotation_deg: rotation as f32,
+                        pins,
+                        footprint_ref: None,
+                        symbol_id,
+                        pin_layout,
+                    });
+                    applied += 1;
+                }
+                tokito::models::SchematicEditOp::RemoveInstance { ref_des, .. } => {
+                    self.editor.symbols.retain(|s| s.ref_des != ref_des);
+                    applied += 1;
+                }
+                tokito::models::SchematicEditOp::ConnectPins { net_name, pins, .. } => {
+                    for w in pins.windows(2) {
+                        let a = PinEndpoint {
+                            ref_des: w[0].0.clone(),
+                            pin_name: w[0].1.clone(),
+                        };
+                        let b = PinEndpoint {
+                            ref_des: w[1].0.clone(),
+                            pin_name: w[1].1.clone(),
+                        };
+                        self.editor.push_wire_between(a, b, net_name.clone());
+                    }
+                    applied += 1;
+                }
+                tokito::models::SchematicEditOp::SetInstanceField {
+                    ref_des,
+                    field,
+                    value,
+                    ..
+                } => {
+                    if field.eq_ignore_ascii_case("footprint") {
+                        if let Some(sym) = self
+                            .editor
+                            .symbols
+                            .iter_mut()
+                            .find(|s| s.ref_des == ref_des)
+                        {
+                            sym.footprint_ref = Some(value);
+                            applied += 1;
+                        }
+                    }
+                }
+            }
+        }
+        self.pending_edit_selected.clear();
+        self.studio_dirty = true;
+        self.log_console(format!(
+            "Applied {applied} build edit(s) — Undo reverts the batch."
+        ));
+    }
+
+    fn resolve_symbol_for_instance(
+        &self,
+        part_id: Option<Uuid>,
+        prefix: &str,
+    ) -> (Option<String>, Vec<(String, f32, f32)>) {
+        let Some(lib) = self.base_symbols.as_ref() else {
+            return (None, vec![]);
+        };
+        if let Some(id) = part_id {
+            if let Some(mpn) = self.part_cache.get(&id) {
+                let pre = guess_prefix(mpn);
+                if let Some((sym, pins)) = lib.default_for_prefix(pre) {
+                    return (Some(sym), pins);
+                }
+            }
+        }
+        if let Some((sym, pins)) = lib.default_for_prefix(prefix) {
+            return (Some(sym), pins);
+        }
+        (None, vec![])
+    }
+
+    pub(crate) fn duplicate_selection(&mut self) {
+        if self.editor.selected_syms.is_empty() {
+            if let Some(rd) = self.editor.selected_sym.clone() {
+                self.editor.selected_syms.insert(rd);
+            } else {
+                return;
+            }
+        }
+        self.before_canvas_edit();
+        let n = self
+            .editor
+            .duplicate_selected_symbols(egui::Vec2::new(crate::canvas::GRID_PX * 2.0, 0.0));
+        if n > 0 {
+            self.log_console(format!("Duplicated {n} symbol(s)."));
+        }
+    }
+
+    fn write_mcad_handoff_json(
+        &self,
+        path: &str,
+        document: &SchematicDocument,
+    ) -> std::io::Result<()> {
+        let placements: Vec<serde_json::Value> = self
+            .editor
+            .symbols
+            .iter()
+            .filter_map(|s| {
+                let fp = s.footprint_ref.as_deref().filter(|f| !f.is_empty())?;
+                Some(serde_json::json!({
+                    "ref_des": s.ref_des,
+                    "footprint": fp,
+                    "part_id": s.part_id,
+                    "symbol_id": s.symbol_id,
+                    "x_mm": s.pos.x,
+                    "y_mm": s.pos.y,
+                    "rotation_deg": s.rotation_deg,
+                    "sheet_id": self.editor.active_sheet_id,
+                }))
+            })
+            .collect();
+        let payload = serde_json::json!({
+            "format": "tokito_mcad_handoff_v1",
+            "design": self.design.as_ref().map(|d| &d.name),
+            "sheet_count": document.sheets.len(),
+            "placements": placements,
+        });
+        std::fs::write(
+            path,
+            serde_json::to_string_pretty(&payload).unwrap_or_default(),
+        )
+    }
+
+    pub(crate) fn place_generic_symbol(&mut self, prefix: &str) {
+        self.editor.place_request = Some(PlaceSymbolRequest {
+            prefix: prefix.to_string(),
+            part_id: None,
+            symbol_id: None,
+            pin_layout: vec![],
+        });
+        self.editor.tool = CanvasTool::PlaceSymbol;
+    }
+
+    pub(crate) fn discard_pending_edit_batch(&mut self) {
+        self.pending_edit_batch = None;
+        self.pending_edit_selected.clear();
+        self.log_console("Discarded proposed build edits.");
+    }
+
     fn apply_generated_schematic(
         &mut self,
         draft: ReplaceSchematic,
         erc_warnings: &[ErcViolation],
+        record_undo: bool,
     ) {
-        self.before_canvas_edit();
-        self.symbols = draft
+        if record_undo {
+            self.before_canvas_edit();
+        }
+        self.editor.symbols = draft
             .instances
             .iter()
             .map(|i| Sym {
@@ -940,6 +905,9 @@ impl App {
                     .collect::<HashSet<_>>()
                     .into_iter()
                     .collect(),
+                footprint_ref: None,
+                symbol_id: None,
+                pin_layout: vec![],
             })
             .collect();
         let mut by_net: HashMap<String, Vec<(String, String)>> = HashMap::new();
@@ -958,8 +926,8 @@ impl App {
                 }
             }
             for w in uniq.windows(2) {
-                let a_sym = self.symbols.iter().find(|s| s.ref_des == w[0].0);
-                let b_sym = self.symbols.iter().find(|s| s.ref_des == w[1].0);
+                let a_sym = self.editor.symbols.iter().find(|s| s.ref_des == w[0].0);
+                let b_sym = self.editor.symbols.iter().find(|s| s.ref_des == w[1].0);
                 let bends = match (a_sym, b_sym) {
                     (Some(sa), Some(sb)) => manhattan_bends(
                         symbol_pin_world(sa, &w[0].1),
@@ -977,10 +945,11 @@ impl App {
                 });
             }
         }
-        self.wires = wires;
-        self.net_labels.clear();
-        self.junctions.clear();
-        self.no_connects.clear();
+        self.editor.load_legacy_wires(wires);
+        self.editor.net_labels.clear();
+        self.editor.junctions.clear();
+        self.editor.no_connects.clear();
+        self.editor.request_zoom_fit();
         self.err = None;
         self.set_erc_note_from_slice(erc_warnings);
         self.bom_dirty = true;
@@ -991,9 +960,15 @@ impl App {
         if self.generation_rx.is_some() {
             return;
         }
+        if !self.ai_build_ready {
+            self.set_err(
+                "AI build requires TOKITO_XAI_API_KEY and TOKITO_FIRECRAWL_API_KEY in .env — copy .env.example and restart.",
+            );
+            return;
+        }
         let trimmed = self.prompt.trim().to_string();
         if trimmed.is_empty() {
-            self.set_err("Describe what you want the schematic to do, then generate.");
+            self.set_err("Describe what this board should do, then click Build schematic.");
             return;
         }
 
@@ -1009,12 +984,18 @@ impl App {
         let repaint = ctx.clone();
 
         self.rt.spawn(async move {
-            let outcome: Result<(ReplaceSchematic, Vec<ErcViolation>), String> =
-                tokito::services::design_pipeline::build_design_from_prompt(
-                    &state, &pool, user_id, design_id, &prompt,
-                )
-                .await
-                .map_err(|e| e.to_string());
+            let outcome = tokito::services::design_pipeline::build_design_from_prompt(
+                &state, &pool, user_id, design_id, &prompt,
+            )
+            .await
+            .map(|(schematic, erc)| {
+                let batch = SchematicEditBatch::from_replace(
+                    schematic.clone(),
+                    "Replace schematic from AI build",
+                );
+                (schematic, erc, batch)
+            })
+            .map_err(|e| e.to_string());
             let _ = tx.send(outcome);
             repaint.request_repaint();
         });
@@ -1023,8 +1004,8 @@ impl App {
         ctx.request_repaint();
     }
 
-    fn search_parts(&mut self) {
-        let q = self.parts_query.trim().to_string();
+    pub(crate) fn search_parts_catalog(&mut self) {
+        let q = self.place_query.trim().to_string();
         let res = self.rt.block_on(async {
             tokito::store::parts::search(
                 &self.pool,
@@ -1043,6 +1024,7 @@ impl App {
                         id: p.id,
                         mpn: p.mpn,
                         description: p.description,
+                        package_name: p.package_name,
                     })
                     .collect();
             }
@@ -1050,90 +1032,118 @@ impl App {
         }
     }
 
+    pub(crate) fn search_catalog(&mut self) {
+        let q = self.place_query.trim().to_string();
+        if q.is_empty() {
+            self.catalog_hits.clear();
+            return;
+        }
+        let state = self.state.clone();
+        let res = self.rt.block_on(async move {
+            tokito::services::catalog_search::search(&state, &q, 30).await
+        });
+        match res {
+            Ok(hits) => {
+                self.catalog_hits = hits
+                    .into_iter()
+                    .map(|h| CatalogHit {
+                        mpn: h.mpn,
+                        manufacturer: h.manufacturer,
+                        description: h.description,
+                        package_name: h.package_name,
+                        footprint_hint: h.footprint_hint,
+                        datasheet_url: h.datasheet_url,
+                        distributor: h.distributor,
+                        sku: h.sku,
+                        product_url: h.product_url,
+                    })
+                    .collect();
+                self.log_console(format!(
+                    "Catalog: {} hit(s) from LCSC{}",
+                    self.catalog_hits.len(),
+                    if self.state.nexar.is_some() {
+                        " + Nexar"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            Err(e) => self.set_err(e),
+        }
+    }
+
+    pub(crate) fn place_catalog_hit(&mut self, hit: &CatalogHit) {
+        self.before_canvas_edit();
+        let prefix = guess_prefix(&hit.mpn);
+        let ref_des = next_refdes(&self.editor.symbols, prefix);
+        let (symbol_id, pin_layout) = self.resolve_symbol_for_instance(None, prefix);
+        let pins: Vec<String> = if pin_layout.is_empty() {
+            vec!["1".into(), "2".into()]
+        } else {
+            pin_layout.iter().map(|(n, _, _)| n.clone()).collect()
+        };
+        let footprint_ref = hit.footprint_hint.clone().or_else(|| {
+            hit.package_name
+                .as_ref()
+                .map(|p| tokito::services::footprint_map::hint_from_package(p))
+        });
+        let pos = self
+            .editor
+            .screen_center_world()
+            .unwrap_or_else(|| self.editor.snap_world(Pos2::new(240.0, 240.0)));
+        self.editor.symbols.push(Sym {
+            ref_des: ref_des.clone(),
+            part_id: None,
+            pos,
+            rotation_deg: 0.0,
+            pins,
+            footprint_ref,
+            symbol_id,
+            pin_layout,
+        });
+        self.editor.tool = CanvasTool::Select;
+        self.mcad_viewer.invalidate();
+        self.log_console(format!(
+            "Placed {} ({}) — assign part in BOM or import to catalog",
+            ref_des, hit.distributor
+        ));
+    }
+
     fn drop_part_as_symbol(&mut self, part: &PartRow) {
         self.before_canvas_edit();
         let prefix = guess_prefix(&part.mpn);
-        let ref_des = next_refdes(&self.symbols, prefix);
+        let ref_des = next_refdes(&self.editor.symbols, prefix);
         self.part_cache.insert(part.id, part.mpn.clone());
-        let pos = if let Some(rect) = self.canvas_screen_rect {
-            let origin = rect.min;
-            let p = self.viewport.screen_to_world(origin, rect.center());
-            if self.snap_enabled {
-                snap_world_pos(p)
-            } else {
-                p
-            }
-        } else if self.snap_enabled {
-            snap_world_pos(Pos2::new(240.0, 240.0))
+        let pos = self
+            .editor
+            .screen_center_world()
+            .unwrap_or_else(|| self.editor.snap_world(Pos2::new(240.0, 240.0)));
+        let (symbol_id, pin_layout) = self.resolve_symbol_for_instance(Some(part.id), prefix);
+        let pins: Vec<String> = if pin_layout.is_empty() {
+            vec!["1".to_string(), "2".to_string()]
         } else {
-            Pos2::new(240.0, 240.0)
+            pin_layout.iter().map(|(n, _, _)| n.clone()).collect()
         };
-        self.symbols.push(Sym {
+        let footprint_ref = part
+            .package_name
+            .as_ref()
+            .map(|p| tokito::services::footprint_map::hint_from_package(p));
+        self.editor.symbols.push(Sym {
             ref_des,
             part_id: Some(part.id),
             pos,
             rotation_deg: 0.0,
-            pins: vec!["1".to_string(), "2".to_string()],
+            pins,
+            footprint_ref,
+            symbol_id,
+            pin_layout,
         });
+        self.mcad_viewer.invalidate();
     }
 
     fn delete_selected(&mut self) {
-        if let Some(ref_des) = self.selected_sym.take() {
-            self.before_canvas_edit();
-            self.symbols.retain(|s| s.ref_des != ref_des);
-            self.wires.retain(|w| w.a != ref_des && w.b != ref_des);
-            return;
-        }
-        if let Some(i) = self.selected_wire.take() {
-            self.before_canvas_edit();
-            if i < self.wires.len() {
-                self.wires.remove(i);
-            }
-            return;
-        }
-        if let Some(i) = self.selected_net_label.take() {
-            self.before_canvas_edit();
-            if i < self.net_labels.len() {
-                self.net_labels.remove(i);
-            }
-            return;
-        }
-        if let Some(i) = self.selected_junction.take() {
-            self.before_canvas_edit();
-            if i < self.junctions.len() {
-                self.junctions.remove(i);
-            }
-            return;
-        }
-        if let Some(i) = self.selected_no_connect.take() {
-            self.before_canvas_edit();
-            if i < self.no_connects.len() {
-                self.no_connects.remove(i);
-            }
-            return;
-        }
-        if let Some(i) = self.selected_power_symbol.take() {
-            self.before_canvas_edit();
-            if i < self.power_symbols.len() {
-                self.power_symbols.remove(i);
-            }
-            return;
-        }
-        if let Some(i) = self.selected_text_item.take() {
-            self.before_canvas_edit();
-            if i < self.text_items.len() {
-                self.text_items.remove(i);
-            }
-            return;
-        }
-        if let Some(i) = self.selected_bus.take() {
-            self.before_canvas_edit();
-            if i < self.buses.len() {
-                self.buses.remove(i);
-            }
-        }
+        self.editor.delete_selected();
     }
 }
 
 include!("impl_eframe.rs");
-include!("impl_ui.rs");

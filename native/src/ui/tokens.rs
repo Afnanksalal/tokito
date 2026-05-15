@@ -1,15 +1,16 @@
-//! CAD-style dark palette + spacing scale (dense UI).
+//! UI color and spacing tokens.
 
 use egui::{Color32, Margin, Rounding, Stroke};
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)] // reserved for wider theme parity / inspector polish
 pub struct UiTokens {
     pub bg_app: Color32,
     pub bg_panel: Color32,
     pub bg_elevated: Color32,
+    /// Schematic sheet (always light gray).
     pub bg_canvas: Color32,
     pub bg_hover: Color32,
+    pub bg_chip_selected: Color32,
     pub stroke_subtle: Stroke,
     pub stroke_focus: Stroke,
     pub accent: Color32,
@@ -25,31 +26,67 @@ pub struct UiTokens {
     pub radius_sm: Rounding,
     pub radius_md: Rounding,
     pub margin_panel: Margin,
+    // Schematic sheet ink
+    pub sym_ink: Color32,
+    pub sym_ink_hover: Color32,
+    pub sym_ink_selected: Color32,
+    pub sym_outline: Color32,
+    pub sym_sel_ring: Color32,
+    pub canvas_grid_minor: Color32,
+    pub canvas_grid_major: Color32,
+    pub canvas_frame: Color32,
+    pub wire: Color32,
+    pub wire_highlight: Color32,
+    pub wire_selected: Color32,
+    pub label_ink: Color32,
+    pub refdes_ink: Color32,
+    pub pin_ink: Color32,
+    pub pin_hot: Color32,
+    pub selection: Color32,
+    pub preview_bg: Color32,
 }
 
 impl Default for UiTokens {
     fn default() -> Self {
         Self {
-            bg_app: Color32::from_rgb(17, 18, 22),
-            bg_panel: Color32::from_rgb(24, 26, 31),
-            bg_elevated: Color32::from_rgb(33, 36, 43),
-            bg_canvas: Color32::from_rgb(12, 15, 18),
-            bg_hover: Color32::from_rgb(48, 52, 61),
-            stroke_subtle: Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 24)),
-            stroke_focus: Stroke::new(1.0, Color32::from_rgb(72, 128, 196)),
-            accent: Color32::from_rgb(56, 116, 190),
-            accent_dim: Color32::from_rgba_unmultiplied(56, 116, 190, 88),
-            text_primary: Color32::from_rgb(236, 238, 240),
-            text_secondary: Color32::from_rgb(184, 188, 195),
-            text_muted: Color32::from_rgb(132, 138, 148),
-            danger: Color32::from_rgb(230, 95, 95),
-            warning: Color32::from_rgb(218, 174, 78),
+            bg_app: Color32::from_rgb(198, 201, 206),
+            bg_panel: Color32::from_rgb(214, 217, 222),
+            bg_elevated: Color32::from_rgb(228, 230, 234),
+            bg_canvas: Color32::from_rgb(236, 238, 241),
+            bg_hover: Color32::from_rgb(220, 224, 230),
+            bg_chip_selected: Color32::from_rgb(200, 210, 224),
+            stroke_subtle: Stroke::new(1.0, Color32::from_rgb(178, 182, 190)),
+            stroke_focus: Stroke::new(1.5, Color32::from_rgb(0, 102, 170)),
+            accent: Color32::from_rgb(0, 102, 170),
+            accent_dim: Color32::from_rgba_unmultiplied(0, 102, 170, 48),
+            text_primary: Color32::from_rgb(32, 36, 42),
+            text_secondary: Color32::from_rgb(72, 78, 88),
+            text_muted: Color32::from_rgb(118, 124, 134),
+            danger: Color32::from_rgb(196, 58, 58),
+            warning: Color32::from_rgb(180, 120, 32),
             spacing_xs: 4.0,
             spacing_sm: 8.0,
             spacing_md: 12.0,
-            radius_sm: Rounding::same(4.0),
-            radius_md: Rounding::same(8.0),
-            margin_panel: Margin::same(12.0),
+            radius_sm: Rounding::same(3.0),
+            radius_md: Rounding::same(6.0),
+            margin_panel: Margin::symmetric(10.0, 8.0),
+            sym_ink: Color32::from_rgb(28, 32, 38),
+            sym_ink_hover: Color32::from_rgb(20, 52, 92),
+            sym_ink_selected: Color32::from_rgb(16, 20, 26),
+            sym_outline: Color32::from_rgb(250, 251, 252),
+            sym_sel_ring: Color32::from_rgb(224, 120, 32),
+            canvas_grid_minor: Color32::from_rgba_unmultiplied(140, 148, 158, 28),
+            canvas_grid_major: Color32::from_rgba_unmultiplied(120, 128, 140, 52),
+            canvas_frame: Color32::from_rgb(168, 174, 184),
+            wire: Color32::from_rgb(52, 88, 128),
+            wire_highlight: Color32::from_rgb(0, 102, 170),
+            wire_selected: Color32::from_rgb(224, 120, 32),
+            label_ink: Color32::from_rgb(40, 72, 108),
+            refdes_ink: Color32::from_rgb(48, 54, 62),
+            pin_ink: Color32::from_rgb(72, 88, 108),
+            pin_hot: Color32::from_rgb(224, 120, 32),
+            selection: Color32::from_rgb(224, 120, 32),
+            preview_bg: Color32::from_rgb(244, 245, 247),
         }
     }
 }

@@ -6,6 +6,7 @@ use egui::{Pos2, Rect, RichText, Stroke, Ui, Vec2, Widget};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
     Select,
+    Place,
     Wire,
     NetLabel,
     Power,
@@ -49,25 +50,22 @@ pub fn cad_tool_button(
 ) -> bool {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(34.0, 32.0), egui::Sense::click());
     let fill = if selected {
-        egui::Color32::from_rgb(46, 65, 88)
+        tokens.bg_chip_selected
     } else if response.hovered() {
         tokens.bg_hover
     } else {
-        tokens.bg_panel
+        tokens.bg_elevated
     };
     let stroke = if selected {
         Stroke::new(1.2, tokens.accent)
     } else {
-        Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 26),
-        )
+        tokens.stroke_subtle
     };
-    ui.painter().rect_filled(rect, 5.0, fill);
-    ui.painter().rect_stroke(rect.shrink(0.5), 5.0, stroke);
+    ui.painter().rect_filled(rect, 4.0, fill);
+    ui.painter().rect_stroke(rect.shrink(0.5), 4.0, stroke);
 
     let ink = if selected {
-        egui::Color32::from_rgb(238, 243, 250)
+        tokens.text_primary
     } else {
         tokens.text_secondary
     };
@@ -86,6 +84,15 @@ fn paint_tool_icon(painter: &egui::Painter, rect: Rect, icon: ToolIcon, ink: egu
     let stroke = Stroke::new(1.65, ink);
 
     match icon {
+        ToolIcon::Place => {
+            painter.rect_stroke(
+                Rect::from_center_size(c, egui::vec2(14.0, 10.0) * s),
+                0.0,
+                stroke,
+            );
+            painter.line_segment([p(0.0, -10.0), p(0.0, 2.0)], stroke);
+            painter.line_segment([p(-5.0, -3.0), p(5.0, -3.0)], stroke);
+        }
         ToolIcon::Select => {
             painter.line_segment([p(-6.0, -8.0), p(-2.0, 8.0)], stroke);
             painter.line_segment([p(-6.0, -8.0), p(6.0, 1.0)], stroke);

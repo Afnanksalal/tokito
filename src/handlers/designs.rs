@@ -21,6 +21,18 @@ pub struct ExportQuery {
     pub format: Option<String>,
 }
 
+fn attachment(content_type: &'static str, filename: String, body: Vec<u8>) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{filename}\""),
+        )
+        .body(Body::from(body))
+        .expect("attachment response headers are valid")
+}
+
 pub async fn list_designs(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthUser>,
@@ -82,27 +94,47 @@ pub async fn export_design(
     let fmt = q.format.as_deref().unwrap_or("json");
     if fmt == "csv" {
         let csv = bom::csv_export(&state.pool, id).await?;
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/csv; charset=utf-8")
-            .header(
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"design-{id}-bom.csv\""),
-            )
-            .body(Body::from(csv))
-            .unwrap())
+        Ok(attachment(
+            "text/csv; charset=utf-8",
+            format!("design-{id}-bom.csv"),
+            csv.into_bytes(),
+        ))
     } else if fmt == "netlist" {
         let schematic_view = schematic::get_view(&state.pool, id).await?;
         let text = crate::services::netlist::connectivity_text(&schematic_view);
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .header(
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"design-{id}-netlist.txt\""),
-            )
-            .body(Body::from(text))
-            .unwrap())
+        Ok(attachment(
+            "text/plain; charset=utf-8",
+            format!("design-{id}-netlist.txt"),
+            text.into_bytes(),
+        ))
+    } else if fmt == "sexp_netlist" {
+        let schematic_view = schematic::get_view(&state.pool, id).await?;
+        let text = crate::services::sexp_netlist::export(&schematic_view);
+        Ok(attachment(
+            "text/plain; charset=utf-8",
+            format!("design-{id}.net"),
+            text.into_bytes(),
+        ))
+    } else if fmt == "svg" {
+        let doc = schematic_document::get(&state.pool, id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("schematic document not found".into()))?;
+        let svg = crate::services::svg_export::document_to_svg(&doc);
+        Ok(attachment(
+            "image/svg+xml; charset=utf-8",
+            format!("design-{id}.svg"),
+            svg.into_bytes(),
+        ))
+    } else if fmt == "pdf" {
+        let doc = schematic_document::get(&state.pool, id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("schematic document not found".into()))?;
+        let pdf = crate::services::pdf_export::document_to_pdf(&doc);
+        Ok(attachment(
+            "application/pdf",
+            format!("design-{id}.pdf"),
+            pdf,
+        ))
     } else {
         let design = design_store::get(&state.pool, id).await?;
         let bom_lines = bom::list_for_design(&state.pool, id).await?;
@@ -185,7 +217,8 @@ pub async fn put_schematic(
     Json(body): Json<ReplaceSchematic>,
 ) -> AppResult<Json<serde_json::Value>> {
     let _ = design_store::assert_visible(&state.pool, id, auth.user_id).await?;
-    let erc = crate::services::schematic_validate::erc_light(&body);
+    let doc = SchematicDocument::from_replace_schematic(&body);
+    let erc = crate::services::schematic_validate::erc_full(&body, &doc);
     schematic::replace(&state.pool, id, body).await?;
     Ok(Json(serde_json::json!({ "ok": true, "erc_warnings": erc })))
 }
@@ -212,7 +245,7 @@ pub async fn put_schematic_document(
 ) -> AppResult<Json<serde_json::Value>> {
     let _ = design_store::assert_visible(&state.pool, id, auth.user_id).await?;
     let (normalized, document_diagnostics) = body.to_replace_schematic();
-    let erc = crate::services::schematic_validate::erc_light(&normalized);
+    let erc = crate::services::schematic_validate::erc_full(&normalized, &body);
     schematic::replace(&state.pool, id, normalized).await?;
     schematic_document::upsert(&state.pool, id, &body).await?;
     Ok(Json(serde_json::json!({
@@ -227,7 +260,7 @@ pub struct SuggestSchematicBody {
     pub prompt: String,
 }
 
-/// Full pipeline: xAI plan → Firecrawl web search → resolve parts into Postgres → grounded schematic JSON (not auto-saved).
+/// AI build pipeline: plan, research, resolve parts, suggest schematic (not auto-saved).
 pub async fn suggest_schematic(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthUser>,
@@ -247,9 +280,14 @@ pub async fn suggest_schematic(
         prompt,
     )
     .await?;
+    let edit_batch = crate::models::SchematicEditBatch::from_replace(
+        schematic.clone(),
+        "Replace schematic from AI build",
+    );
     Ok(Json(SchematicSuggestResponse {
         schematic,
         erc_warnings,
+        edit_batch,
     }))
 }
 

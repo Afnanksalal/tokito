@@ -2,12 +2,28 @@
 name = "tokito-native"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.88"
 description = "Tokito native desktop app (egui)"
 license = "MIT"
 readme = "../README.md"
 repository = "https://github.com/Afnanksalal/tokito"
 homepage = "https://github.com/Afnanksalal/tokito"
+default-run = "tokito-native"
+
+[lints.rust]
+dead_code = "allow"
+
+[lints.clippy]
+too_many_arguments = "allow"
+type_complexity = "allow"
+collapsible_if = "allow"
+manual_is_multiple_of = "allow"
+needless_borrow = "allow"
+needless_borrows_for_generic_args = "allow"
+
+[lib]
+name = "tokito_native"
+path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1"
@@ -22,10 +38,24 @@ egui_extras = "0.29"
 egui_dock = "0.14"
 
 uuid = { version = "1", features = ["v4", "serde"] }
-kiutils_kicad = "0.3"
+walkdir = "2"
 
 tokito = { path = ".." }
 serde_json = "1"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "json", "migrate"] }
 bcrypt = "0.15"
+dirs = "5"
+glam = "0.29"
+
+[[bin]]
+name = "tokito-native"
+path = "src/main.rs"
+
+[[bin]]
+name = "tokito-symbol-import"
+path = "src/bin/symbol_import.rs"
+
+[[bin]]
+name = "generate-base-symbols"
+path = "src/bin/generate_base_symbols.rs"
 

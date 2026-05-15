@@ -1,0 +1,17 @@
+//! Studio UI panels (dock tabs, projects launcher, CAD shell).
+
+mod bom;
+mod build;
+mod canvas;
+mod chrome;
+mod command_palette;
+mod console;
+mod design_manager;
+mod inspector;
+mod layout;
+mod messages;
+mod place_panel;
+pub use place_panel::PlaceScope;
+mod projects;
+mod research;
+mod viewer3d;

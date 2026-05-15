@@ -2,6 +2,7 @@
 
 mod agent;
 mod auth;
+mod catalog;
 mod copilot;
 mod designs;
 mod health;
@@ -12,6 +13,7 @@ mod parts;
 
 pub use agent::run_agent;
 pub use auth::{create_api_key, delete_api_key, list_api_keys, login, register};
+pub use catalog::search_catalog;
 pub use copilot::{get_intent, list_research, put_intent, scrape_research, search_research};
 pub use designs::{
     append_bom, create_design, export_design, get_bom, get_design, get_schematic,

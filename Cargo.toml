@@ -2,21 +2,27 @@
 name = "tokito"
 version = "0.1.0"
 edition = "2021"
-description = "Tokito — schematic + BOM API (MVP)"
+description = "Schematic studio and BOM API"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/Afnanksalal/tokito"
 homepage = "https://github.com/Afnanksalal/tokito"
-rust-version = "1.74"
+rust-version = "1.88"
+
+[features]
+default = []
+test-support = []
 
 [dependencies]
 anyhow = "1"
 axum = { version = "0.7", features = ["macros", "json"] }
 bcrypt = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
 dotenvy = "0.15"
 hex = "0.4"
 jsonwebtoken = "9"
+pg-embed = { version = "1.0", features = ["rt_tokio_migrate"] }
 rand = { version = "0.8", features = ["std_rng"] }
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
@@ -35,7 +41,7 @@ sqlx = { version = "0.8", features = [
 ] }
 thiserror = "1"
 tokio = { version = "1", features = ["full"] }
-tower = "0.5"
+tower = { version = "0.5" }
 tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
 urlencoding = "2"
 tracing = "0.1"
@@ -45,6 +51,7 @@ uuid = { version = "1", features = ["serde", "v4"] }
 [dev-dependencies]
 http-body-util = "0.1"
 serde_json = "1"
+tokito = { path = ".", features = ["test-support"] }
 tower = { version = "0.5", features = ["util"] }
 
 [profile.release]

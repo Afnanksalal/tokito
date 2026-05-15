@@ -2,7 +2,7 @@
 
 use std::env;
 
-/// xAI (Grok) — OpenAI-compatible API. See [xAI docs](https://docs.x.ai/docs/tutorial).
+/// xAI Grok (OpenAI-compatible chat API).
 #[derive(Debug, Clone)]
 pub struct XaiConfig {
     pub api_key: String,
@@ -35,8 +35,9 @@ pub struct AgentLimits {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub http_addr: String,
-    pub database_url: String,
     pub db_max_connections: u32,
+    /// TCP port for embedded Postgres (default `15432`).
+    pub embedded_port: u16,
     /// Allowed browser origins for CORS; empty slice means mirror request (dev only).
     pub cors_origins: Vec<String>,
     pub jwt_secret: String,
@@ -50,9 +51,10 @@ pub struct Config {
 /// Loads configuration from `TOKITO_*` environment variables.
 pub fn load() -> anyhow::Result<Config> {
     let http_addr = env::var("TOKITO_HTTP_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
-    let database_url = env::var("TOKITO_DATABASE_URL").map_err(|_| {
-        anyhow::anyhow!("TOKITO_DATABASE_URL is required (PostgreSQL connection string)")
-    })?;
+    let embedded_port = env::var("TOKITO_EMBEDDED_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(15_432);
     let db_max_connections: u32 = env::var("TOKITO_DB_MAX_CONNECTIONS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -66,10 +68,18 @@ pub fn load() -> anyhow::Result<Config> {
         })
         .unwrap_or_default();
 
-    let jwt_secret = env::var("TOKITO_JWT_SECRET").unwrap_or_else(|_| {
-        tracing::warn!("TOKITO_JWT_SECRET not set; using insecure development default");
-        "tokito-dev-insecure-jwt-secret-change-me".to_string()
-    });
+    let jwt_secret = match env::var("TOKITO_JWT_SECRET") {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ if cfg!(debug_assertions) => {
+            tracing::warn!("TOKITO_JWT_SECRET not set; using insecure development default");
+            "tokito-dev-insecure-jwt-secret-change-me".to_string()
+        }
+        _ => {
+            anyhow::bail!(
+                "TOKITO_JWT_SECRET is required in release builds (set a long random secret)"
+            );
+        }
+    };
 
     let xai = env::var("TOKITO_XAI_API_KEY")
         .ok()
@@ -127,8 +137,8 @@ pub fn load() -> anyhow::Result<Config> {
 
     Ok(Config {
         http_addr,
-        database_url,
         db_max_connections,
+        embedded_port,
         cors_origins,
         jwt_secret,
         xai,
@@ -137,4 +147,26 @@ pub fn load() -> anyhow::Result<Config> {
         lcsc_anonymous_search,
         agent,
     })
+}
+
+#[cfg(feature = "test-support")]
+impl Config {
+    pub fn for_tests() -> Self {
+        Self {
+            http_addr: "127.0.0.1:0".into(),
+            db_max_connections: 5,
+            embedded_port: 17_334,
+            cors_origins: vec![],
+            jwt_secret: "test-jwt-secret".into(),
+            xai: None,
+            firecrawl: None,
+            nexar: None,
+            lcsc_anonymous_search: false,
+            agent: AgentLimits {
+                max_iterations: 5,
+                max_llm_tokens_per_run: 8000,
+                default_model: "test".into(),
+            },
+        }
+    }
 }

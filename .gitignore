@@ -6,8 +6,9 @@
 
 # Build artifacts & installers
 /bin
-/dist
+/dist/
 *.exe
+!scripts/
 *.dll
 *.so
 *.dylib
@@ -49,7 +50,6 @@ desktop.ini
 # SQLx (offline data dir if enabled later)
 .sqlx/
 
-# Legacy SPA — lingering installs block deletes on some machines (see scripts/purge-web.ps1)
 web/node_modules/
 
 # Misc

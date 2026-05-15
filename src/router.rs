@@ -122,6 +122,7 @@ pub fn build(
             "/manufacturers",
             get(handlers::list_mfg).post(handlers::create_mfg),
         )
+        .route("/catalog/search", get(handlers::search_catalog))
         .route(
             "/parts",
             get(handlers::search_parts).post(handlers::create_part),

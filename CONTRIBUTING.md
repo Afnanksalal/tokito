@@ -7,9 +7,34 @@ Thanks for improving Tokito. This workspace ships:
 
 Both share migrations, domain logic, and integrations.
 
+```mermaid
+flowchart TB
+  subgraph workspace[Workspace]
+    C[tokito crate — lib + HTTP binary]
+    N[tokito-native — desktop binary]
+  end
+  subgraph shared[Shared]
+    M[migrations/]
+    T[tests / SQLx]
+  end
+  C --- M
+  N --- M
+  C --- T
+```
+
 ---
 
 ## Before you open a PR
+
+```mermaid
+flowchart LR
+  F["cargo fmt --check"] --> L["cargo clippy<br/>-D warnings"]
+  L --> U["cargo test --workspace"]
+  U --> I{"DB-related<br/>change?"}
+  I -->|optional deep check| D["TOKITO_RUN_DB_INTEGRATION=1<br/>api_* tests"]
+  I --> PR[Open PR]
+  D --> PR
+```
 
 From the repo root:
 
@@ -19,18 +44,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-Optional Postgres integration test (create a test DB and set the URL):
+API integration tests (embedded Postgres; set **`TOKITO_RUN_DB_INTEGRATION=1`**, first run may download binaries). CI sets this automatically.
 
 ```bash
-export TOKITO_TEST_DATABASE_URL="postgres://tokito:tokito@localhost:5433/tokito_test?sslmode=disable"
-cargo test -p tokito --test integration -- --ignored --nocapture
-```
-
-PowerShell:
-
-```powershell
-$env:TOKITO_TEST_DATABASE_URL = "postgres://..."
-cargo test -p tokito --test integration -- --ignored --nocapture
+TOKITO_RUN_DB_INTEGRATION=1 cargo test -p tokito --test api_designs --test api_parts --test api_schematic
 ```
 
 ---

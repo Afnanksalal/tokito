@@ -1,0 +1,33 @@
+(tokito_symbol_lib
+	(version 20251024)
+	(generator "tokito_symbol_gen")
+	(generator_version "1.0")
+	(symbol "L_0805"
+		(property "Reference" "R"
+			(at 0 0 0)
+			(effects (font (size 1.27 1.27))))
+		(property "Value" "L_0805"
+			(at 0 0 0)
+			(effects (font (size 1.27 1.27))))
+		(property "Footprint" ""
+			(at 0 0 0)
+			(effects (font (size 1.27 1.27))))
+		(property "Description" "Inductor"
+			(at 0 0 0)
+			(effects (font (size 1.27 1.27))))
+		(property "fp_filters" "L_*"
+			(at 0 0 0)
+			(effects (font (size 1.27 1.27))))
+		(symbol "L_0805_0_1"
+			(rectangle
+				(start --1 -2.5)
+				(end -1 2.5)
+				(stroke (width 0.254) (type default))
+				(fill (type none))))
+		(symbol "L_0805_1_1"
+			(pin passive line (at 0 3.77 270) (length 1.27)
+				(number "1" (effects (font (size 1.27 1.27)))))
+			(pin passive line (at 0 -3.77 90) (length 1.27)
+				(number "2" (effects (font (size 1.27 1.27))))))
+	)
+)

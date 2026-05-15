@@ -11,25 +11,11 @@ env:
 jobs:
   rust:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: tokito
-          POSTGRES_PASSWORD: tokito
-          POSTGRES_DB: tokito_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U tokito -d tokito_test"
-          --health-interval 3s
-          --health-timeout 3s
-          --health-retries 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.88
         with:
           components: rustfmt, clippy
 
@@ -45,7 +31,7 @@ jobs:
       - name: Unit tests
         run: cargo test
 
-      - name: Integration test (Postgres)
+      - name: API integration tests
         env:
-          TOKITO_TEST_DATABASE_URL: postgres://tokito:tokito@localhost:5432/tokito_test
-        run: cargo test --test integration -- --ignored --nocapture
+          TOKITO_RUN_DB_INTEGRATION: "1"
+        run: cargo test --test api_designs --test api_parts --test api_schematic --test golden_document --test services_exports -- --nocapture

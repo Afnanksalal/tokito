@@ -1,38 +1,41 @@
-//! CAD-style dark visuals + bundled proportional / monospace fonts.
+//! Light gray CAD visuals + bundled proportional / monospace fonts.
 
 use crate::ui::UiTokens;
-use egui::{Color32, FontData, FontDefinitions, FontFamily, Rounding, Stroke, Visuals};
+use egui::{FontData, FontDefinitions, FontFamily, Rounding, Stroke, Visuals};
 
 pub fn apply(ctx: &egui::Context) {
     setup_fonts(ctx);
 
-    let tokens = UiTokens::default();
-    let mut visuals = Visuals::dark();
-    visuals.override_text_color = Some(tokens.text_primary);
+    let t = UiTokens::default();
+    let mut visuals = Visuals::light();
+    visuals.override_text_color = Some(t.text_primary);
 
-    visuals.window_fill = tokens.bg_panel;
-    visuals.panel_fill = tokens.bg_panel;
-    visuals.extreme_bg_color = tokens.bg_app;
-    visuals.faint_bg_color = Color32::from_rgb(31, 34, 40);
-    visuals.widgets.noninteractive.bg_fill = tokens.bg_elevated;
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, Color32::from_rgb(140, 144, 152));
-    visuals.widgets.inactive.bg_fill = Color32::from_rgb(37, 40, 48);
-    visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(31, 34, 40);
-    visuals.widgets.hovered.bg_fill = tokens.bg_hover;
-    visuals.widgets.active.bg_fill = Color32::from_rgb(50, 58, 70);
+    visuals.window_fill = t.bg_panel;
+    visuals.panel_fill = t.bg_panel;
+    visuals.extreme_bg_color = t.bg_app;
+    visuals.faint_bg_color = t.bg_elevated;
+    visuals.widgets.noninteractive.bg_fill = t.bg_elevated;
+    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, t.text_muted);
+    visuals.widgets.inactive.bg_fill = t.bg_elevated;
+    visuals.widgets.inactive.weak_bg_fill = t.bg_panel;
+    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, t.text_secondary);
+    visuals.widgets.hovered.bg_fill = t.bg_hover;
+    visuals.widgets.active.bg_fill = t.bg_chip_selected;
     visuals.widgets.open.bg_fill = visuals.widgets.active.bg_fill;
 
-    visuals.selection.bg_fill = tokens.accent_dim;
-    visuals.selection.stroke = Stroke::new(1.0, tokens.accent);
+    visuals.selection.bg_fill = t.accent_dim;
+    visuals.selection.stroke = Stroke::new(1.0, t.accent);
 
-    visuals.window_rounding = tokens.radius_md;
-    visuals.menu_rounding = Rounding::same(8.0);
+    visuals.window_rounding = t.radius_md;
+    visuals.menu_rounding = Rounding::same(6.0);
+    visuals.window_shadow = egui::epaint::Shadow::NONE;
 
     ctx.set_visuals(visuals);
     let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(7.0, 7.0);
+    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 5.0);
     style.spacing.window_margin = egui::Margin::same(8.0);
+    style.spacing.indent = 14.0;
     ctx.set_style(style);
 }
 

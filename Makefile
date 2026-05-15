@@ -1,12 +1,14 @@
-.PHONY: dev test lint fmt check docker-up docker-down
+.PHONY: dev test lint fmt check
 
-# Run API locally (Postgres via docker-compose assumed on port 5433)
 dev:
-	docker compose up -d postgres
-	set TOKITO_DATABASE_URL=postgres://tokito:tokito@localhost:5433/tokito?sslmode=disable && cargo run -p tokito
+	cargo run -p tokito-native
 
 test:
-	cargo test
+	cargo test --workspace
+
+# Requires pg-embed binary download/extract (network)
+test-db:
+	TOKITO_RUN_DB_INTEGRATION=1 cargo test -p tokito --test api_designs --test api_parts --test api_schematic -- --nocapture
 
 lint:
 	cargo clippy --all-targets -- -D warnings
@@ -15,9 +17,3 @@ fmt:
 	cargo fmt --check
 
 check: fmt lint test
-
-docker-up:
-	docker compose up -d postgres
-
-docker-down:
-	docker compose down
