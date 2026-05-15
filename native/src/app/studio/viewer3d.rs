@@ -1,4 +1,4 @@
-//! MCAD / 3D viewer — three-d footprint board preview.
+//! Board preview — heuristic 3D blocks from schematic symbols with footprints (MCAD handoff aid).
 
 use crate::app::studio::chrome::TabChrome;
 use crate::app::App;
@@ -10,10 +10,20 @@ impl App {
         let chrome = TabChrome::begin(ui, &tokens);
         chrome.header(
             ui,
-            "3D / MCAD",
-            Some("3D board preview — orbit: drag · pan: right-drag · zoom: scroll"),
+            "Board preview",
+            Some("Orbit: drag · pan: right-drag · zoom: scroll — not a PCB editor"),
         );
 
+        ui.label(
+            egui::RichText::new(
+                "Schematic-only today: this panel draws simple 3D blocks from symbol positions and \
+                 footprint names so you can orient the pile of parts and export MCAD JSON. \
+                 There is no PCB canvas, routing, or true board 3D yet—that is normal EDA after layout.",
+            )
+            .small()
+            .weak(),
+        );
+        ui.add_space(8.0);
         let placements = placements_from_symbols(&self.editor.symbols);
         if placements.len() != self.editor.symbols.len() {
             ui.label(

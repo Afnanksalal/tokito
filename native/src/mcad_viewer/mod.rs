@@ -1,4 +1,4 @@
-//! Interactive 3D board preview (fast CPU rasterizer — no GPU context conflicts with egui).
+//! Heuristic “pile of footprints” preview for schematic-driven MCAD export (not PCB layout).
 
 mod raster;
 pub mod scene;
@@ -76,7 +76,10 @@ impl McadViewer {
             ui.put(
                 rect,
                 egui::Label::new(
-                    egui::RichText::new("Assign footprints to see 3D preview")
+                    egui::RichText::new(
+                    "Assign footprints on symbols to see a rough preview.\n\
+                     (Not PCB layout — schematic footprint hints only.)",
+                )
                         .small()
                         .weak(),
                 ),

@@ -69,6 +69,15 @@ impl eframe::App for App {
                                     ui.close_menu();
                                 }
                             });
+                            ui.menu_button("Panels", |ui| {
+                                use crate::app::studio_dock::{ensure_tab_visible, StudioTab};
+                                for tab in StudioTab::DOCK_TABS {
+                                    if ui.button(tab.panel_label()).clicked() {
+                                        ensure_tab_visible(&mut self.dock_state, tab);
+                                        ui.close_menu();
+                                    }
+                                }
+                            });
                             if crate::ui::widgets::secondary_button(ui, &tokens, "Undo").clicked() {
                                 self.undo_canvas();
                             }

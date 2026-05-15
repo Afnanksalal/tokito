@@ -1,5 +1,6 @@
 //! Command palette (Ctrl+Shift+P).
 
+use crate::app::studio_dock::{ensure_tab_visible, StudioTab};
 use crate::app::{App, Route};
 use crate::editor::CanvasTool;
 
@@ -69,6 +70,46 @@ impl App {
             "label" => self.editor.tool = CanvasTool::NetLabel,
             "power" => self.editor.tool = CanvasTool::Power,
             "place" => self.place_generic_symbol("U"),
+            "panel_schematic" => {
+                if matches!(self.route, Route::Studio { .. }) {
+                    ensure_tab_visible(&mut self.dock_state, StudioTab::Canvas);
+                }
+            }
+            "panel_build" => {
+                if matches!(self.route, Route::Studio { .. }) {
+                    ensure_tab_visible(&mut self.dock_state, StudioTab::Build);
+                }
+            }
+            "panel_design" => {
+                if matches!(self.route, Route::Studio { .. }) {
+                    ensure_tab_visible(&mut self.dock_state, StudioTab::DesignManager);
+                }
+            }
+            "panel_bom" => {
+                if matches!(self.route, Route::Studio { .. }) {
+                    ensure_tab_visible(&mut self.dock_state, StudioTab::Bom);
+                }
+            }
+            "panel_messages" => {
+                if matches!(self.route, Route::Studio { .. }) {
+                    ensure_tab_visible(&mut self.dock_state, StudioTab::Messages);
+                }
+            }
+            "panel_research" => {
+                if matches!(self.route, Route::Studio { .. }) {
+                    ensure_tab_visible(&mut self.dock_state, StudioTab::Research);
+                }
+            }
+            "panel_3d" => {
+                if matches!(self.route, Route::Studio { .. }) {
+                    ensure_tab_visible(&mut self.dock_state, StudioTab::Viewer3d);
+                }
+            }
+            "panel_console" => {
+                if matches!(self.route, Route::Studio { .. }) {
+                    ensure_tab_visible(&mut self.dock_state, StudioTab::Console);
+                }
+            }
             _ => {}
         }
     }
@@ -96,4 +137,12 @@ const COMMAND_LIST: &[(&str, &str)] = &[
     ("undo", "Undo"),
     ("redo", "Redo"),
     ("focus", "Focus canvas"),
+    ("panel_schematic", "Panel: Schematic"),
+    ("panel_build", "Panel: Build"),
+    ("panel_design", "Panel: Design manager"),
+    ("panel_bom", "Panel: BOM"),
+    ("panel_messages", "Panel: Messages"),
+    ("panel_research", "Panel: Research"),
+    ("panel_3d", "Panel: Board preview (MCAD)"),
+    ("panel_console", "Panel: Console"),
 ];

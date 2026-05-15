@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
         .map(PathBuf::from);
     if spa_static_dir.is_none() {
         tracing::info!(
-            "API-only mode (no static UI). Run `cargo run -p tokito-native` for the egui app, or set TOKITO_STATIC_DIR to serve an optional SPA from disk."
+            "Starting optional network listener (no static UI). Set TOKITO_STATIC_DIR to serve a web UI from disk."
         );
     }
 

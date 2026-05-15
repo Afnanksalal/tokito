@@ -26,7 +26,7 @@ flowchart TD
 
 Include:
 
-- **Affected surface** — HTTP API, native app, auth, integrations, etc.
+- **Affected area** — desktop app, optional network listener, auth, integrations, etc.
 - **Version or commit** you tested.
 - **Steps to reproduce** or a minimal proof of concept, if it can be shared safely.
 
@@ -36,8 +36,8 @@ We aim to acknowledge valid reports within a **few business days** and coordinat
 
 ## Scope & expectations
 
-- Tokito stores **design and catalog data** and may call **third-party APIs** (xAI, Firecrawl, distributors). **Operational security matters**: protect **`TOKITO_JWT_SECRET`**, database credentials, and API keys; use **TLS** in production; restrict network access to Postgres.
-- **Release API builds** require `TOKITO_JWT_SECRET`; debug builds use an insecure default that must not be deployed.
+- Tokito stores **design and catalog data** locally and may call **third-party services** (xAI, Firecrawl, distributors). Protect **`TOKITO_JWT_SECRET`**, your database files, and API keys; restrict access to the machine hosting the data directory.
+- **Release-quality builds** should set a strong `TOKITO_JWT_SECRET`; debug builds may use a development default that must not be deployed.
 - **Supply chain**: run **`cargo audit`** or enable **Dependabot** in your fork/org as part of your own review process.
 
 Thank you for helping keep users safe.

@@ -1,4 +1,4 @@
-//! Design intent + research artifact HTTP API.
+//! Design intent and research artifact handlers.
 
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};

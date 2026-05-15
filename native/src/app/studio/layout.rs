@@ -135,6 +135,8 @@ impl App {
 
                 DockArea::new(&mut self.dock_state)
                     .style(style)
+                    .show_add_buttons(true)
+                    .show_add_popup(true)
                     .show_inside(ui, &mut viewer);
             });
     }

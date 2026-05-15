@@ -24,14 +24,14 @@ Copy-Item -Recurse $AssetsSrc $AssetsDst
 Copy-Item (Join-Path $Root ".env.example") (Join-Path $Out ".env.example")
 
 @"
-Tokito — AI builds the board; you edit the result
+Tokito — desktop schematic studio. Describe the board; AI drafts; you refine.
 
 1. Copy .env.example to .env beside Tokito.exe
-2. Set TOKITO_XAI_API_KEY and TOKITO_FIRECRAWL_API_KEY (required for Build)
+2. Set TOKITO_XAI_API_KEY and TOKITO_FIRECRAWL_API_KEY (required for AI build)
 3. Double-click Tokito.exe
-4. First launch may download embedded PostgreSQL (needs internet once)
+4. First launch may prepare the local database (internet needed once)
 
-Data: %LOCALAPPDATA%\tokito\
+Your designs: %LOCALAPPDATA%\tokito\
 "@ | Set-Content -Encoding UTF8 (Join-Path $Out "README.txt")
 
 Write-Host ""

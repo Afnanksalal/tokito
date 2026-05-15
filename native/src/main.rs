@@ -1,5 +1,7 @@
 //! Tokito native desktop shell (eframe + egui).
 
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 mod app;
 mod base_symbols;
 mod bootstrap;

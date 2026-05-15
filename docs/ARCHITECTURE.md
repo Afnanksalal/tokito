@@ -1,147 +1,77 @@
-# Architecture
+# How Tokito works
 
-Tokito is a Rust library and Axum server with an optional egui native shell. **Embedded PostgreSQL** (pg-embed) is the system of record — no external or cloud database.
+Tokito is **desktop software**: one window, local data, optional cloud **AI and research services** you configure with API keys.
 
-## Runtime surfaces
+## What runs on your computer
 
-| Surface | Binary | Role |
-|---------|--------|------|
-| Desktop | `tokito-native` | egui studio; links `tokito` for HTTP-backed features |
-| API | `tokito` | `/v1`, `/health`, optional static files (`TOKITO_STATIC_DIR`) |
+The **Tokito** application bundles:
+
+- **Studio UI** — egui: schematic canvas, docked panels (Build, BOM, 3D preview, research, messages, console).
+- **Design engine** — Shared Rust core: schematic model, validation (ERC), exports, AI pipeline orchestration, SQL data access.
+- **Local database** — PostgreSQL binaries managed in-process (pg-embed). Your designs, parts, BOM, and research artifacts are stored here. Data directory is under the OS app-data path (e.g. `%LOCALAPPDATA%\tokito\` on Windows).
+
+There are no extra servers for you to install or containers to run for normal use.
 
 ```mermaid
 flowchart TB
-  subgraph desktop[Desktop shell]
-    N[tokito-native]
+  subgraph app[Tokito desktop]
+    UI[Studio UI]
+    ENG[Design engine]
   end
-  subgraph server[HTTP server]
-    B[tokito binary]
+  subgraph local[On your machine]
+    DB[(Local PostgreSQL)]
   end
-  subgraph core[Shared library]
-    L[tokito crate<br/>router · handlers · store · services]
+  subgraph external[Optional services you configure]
+    X[xAI]
+    F[Firecrawl]
+    N[Nexar]
+    L[LCSC]
   end
-  subgraph data[Local data]
-    PG[(Embedded PostgreSQL<br/>pg-embed)]
-  end
-  N --> L
-  B --> L
-  L --> PG
+  UI <--> ENG
+  ENG <--> DB
+  ENG --> X
+  ENG --> F
+  ENG --> N
+  ENG --> L
 ```
 
-Both binaries run SQLx migrations from `migrations/` at startup.
+## AI build flow (simplified)
 
-## HTTP request path
-
-```mermaid
-flowchart LR
-  C[Client] --> A[Axum<br/>CORS · trace]
-  A --> AM[Auth middleware]
-  AM --> H[Handler]
-  H --> S[Store<br/>SQLx]
-  H --> SV[Service layer<br/>external APIs]
-  S --> DB[(Embedded PostgreSQL)]
-  SV --> X[xAI]
-  SV --> F[Firecrawl]
-  SV --> N[Nexar]
-  SV --> L[LCSC]
-```
-
-| Layer | Path | Responsibility |
-|-------|------|----------------|
-| Router | `src/router.rs` | Routes, `AppState` |
-| Handlers | `src/handlers/` | HTTP adapters, `AppError` mapping |
-| Store | `src/store/` | Queries and transactions |
-| Services | `src/services/` | AI build, validation, exports, catalog |
-
-Key services: `design_pipeline`, `schematic_gen`, `schematic_validate`, `erc_fixes`, `sexp_netlist`, `svg_export`, `pdf_export`, `catalog_search`, `lcsc`, `nexar`.
-
-## AI build data flow
+1. Your prompt becomes structured **intent** stored with the design.
+2. **xAI** proposes research queries and candidate parts; **Firecrawl** pulls web/datasheet context into **research artifacts**.
+3. **xAI** resolves manufacturers, parts, and BOM lines grounded in that research.
+4. **xAI** emits a schematic update; you **review** in the Build panel before applying to the canvas.
 
 ```mermaid
 flowchart TD
-  P[User prompt] --> I[(design_intents)]
-  I --> X1[xAI<br/>queries · candidate MPNs]
-  X1 --> FC[Firecrawl]
-  FC --> RA[(design_research_artifacts)]
-  RA --> X2[xAI<br/>resolve BOM]
-  X2 --> C[(manufacturers · parts)]
-  X2 --> B[(bom_lines)]
-  C --> X3[xAI<br/>ReplaceSchematic]
-  B --> X3
-  X3 --> R[Schematic JSON<br/>BOM-grounded part_id only]
+  P[Prompt] --> I[Intent]
+  I --> R[Research artifacts]
+  R --> B[BOM + parts]
+  B --> S[Schematic proposal]
+  S --> Y[Your review and edits]
 ```
 
-## Data model
+## Data model (overview)
 
-| Area | Tables |
-|------|--------|
-| Identity | users, API keys, usage |
-| Catalog | manufacturers, parts, part_offers |
-| Design | designs, design_intents, design_research_artifacts |
-| Schematic | schematic_instances, schematic_nets, schematic_pins; `schematic_document` JSONB |
-| BOM | bom_lines |
+- **Identity** — local user for single-seat workflows.
+- **Catalog** — manufacturers, parts, offers.
+- **Designs** — metadata, intent, research, schematic tables, JSON document for the editor, BOM lines.
 
-Domain relationships (simplified):
+## Native studio modules (high level)
 
-```mermaid
-flowchart LR
-  subgraph id[Identity]
-    U[users]
-    A[API keys]
-  end
-  subgraph cat[Catalog]
-    MF[manufacturers]
-    PT[parts]
-    PO[part_offers]
-  end
-  subgraph des[Design]
-    D[designs]
-    IN[design_intents]
-    RE[design_research_artifacts]
-  end
-  subgraph sch[Schematic]
-    SI["schematic_* tables"]
-    DOC[schematic_document JSONB]
-  end
-  subgraph bom[BOM]
-    BL[bom_lines]
-  end
-  U --> D
-  MF --> PT
-  PT --> PO
-  D --> IN
-  D --> RE
-  D --> SI
-  D --> DOC
-  D --> BL
-  PT --> BL
-```
+| Area | Role |
+|------|------|
+| `native/src/editor/` | Canvas, tools, geometry, undo |
+| `native/src/app/studio/` | Dock, panels, inspector, Build, command palette |
+| `native/src/mcad_viewer/` | 3D board preview |
+| `native/src/base_symbols/` | Built-in `.tokito_sym` libraries |
 
-## Native editor
+## Repository layout
 
-| Module | Role |
-|--------|------|
-| `native/src/editor/` | Canvas, tools, hit-test, render, undo |
-| `native/src/app/studio/` | Dock UI, place panel, inspector, Build tab |
-| `native/src/base_symbols/` | Load `.tokito_sym` from `assets/base-symbols/` + user dir |
-| `native/src/symbol_format/` | Tokito symbol S-expression parser |
+The workspace shares one **Rust library** (`tokito`) used by the desktop binary (`tokito-native`) for persistence, services, and migrations. Keeping logic in the library avoids duplicating business rules between UI and tests.
 
-Native save path:
+---
 
-```mermaid
-flowchart LR
-  G[Canvas graph] --> SD[SchematicDocument]
-  SD --> E[ERC]
-  E --> PG[(Postgres<br/>schematic + document JSON)]
-```
+## Maintainer note: HTTP surface
 
-## Operations
-
-- **Database:** pg-embed under the user data dir (`TOKITO_EMBEDDED_PORT`, default `15432`). Hold the `EmbeddedPostgres` handle for the process lifetime.
-- **Pool size:** `TOKITO_DB_MAX_CONNECTIONS` (default 10).
-- **Migrations:** applied at process start.
-- **Secrets:** set `TOKITO_JWT_SECRET` in release builds; never commit `.env`.
-
-## Related
-
-- [API.md](API.md) — route reference
+The same `tokito` library can drive an optional **in-process HTTP stack** used for automated tests and advanced setups. It is **not** the primary way you use the product day to day. Route-level detail for that layer lives in [`API.md`](API.md).

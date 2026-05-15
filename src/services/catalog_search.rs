@@ -1,4 +1,4 @@
-//! LCSC + Nexar catalog search; merges hits for `GET /v1/catalog/search`.
+//! LCSC + Nexar catalog search for in-app part placement.
 
 use crate::error::AppResult;
 use crate::models::CatalogPartHit;

@@ -1,8 +1,10 @@
-# HTTP API reference
+# HTTP route map (maintainers)
 
-Tokito exposes a **versioned JSON API** under **`/v1`**, plus **`GET /health`**. All request bodies are **`application/json`** unless stated otherwise.
+> **Tokito is desktop software.** End users run **Tokito.exe** (or the native binary); they do not call HTTP endpoints. This document describes the **optional Axum surface** in the shared `tokito` crate, used for **automated tests**, tooling, and non-default deployments.
 
-**Typical base URL (local):** `http://localhost:8080`
+Tokito can expose a **versioned JSON** surface under **`/v1`**, plus **`GET /health`**. Request bodies are **`application/json`** unless stated otherwise.
+
+**Typical base URL (when the optional server is run):** `http://localhost:8080`
 
 ```mermaid
 flowchart LR
@@ -11,7 +13,7 @@ flowchart LR
     NAT[Native studio]
     SCR[Scripts · CI]
   end
-  subgraph api[Tokito API]
+  subgraph api[Optional HTTP surface]
     AX["/health · /v1/*"]
   end
   subgraph core[Domain]
