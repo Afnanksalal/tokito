@@ -111,7 +111,7 @@ Full reference: [`.env.example`](.env.example) (Nexar, LCSC, agent limits, integ
 | Catalog | `GET/POST /v1/manufacturers`, `GET/POST /v1/parts`, `GET /v1/parts/:id` |
 | Designs | `POST /v1/designs`, `GET/PATCH /v1/designs/:id`, `GET …/export` |
 | BOM | `GET/PUT /v1/designs/:id/bom` |
-| Schematic | `GET/PUT …/schematic`, **`POST …/schematic/suggest`** (full pipeline), `POST …/schematic/validate` |
+| Schematic | `GET/PUT …/schematic`, `GET/PUT …/schematic/document`, **`POST …/schematic/suggest`** (full pipeline), `POST …/schematic/validate` |
 | Copilot data | `GET/PUT …/intent`, `GET …/research`, `POST …/research/scrape`, `POST …/research/search` |
 
 Authoritative request/response shapes: **[`docs/API.md`](docs/API.md)**

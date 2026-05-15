@@ -7,13 +7,22 @@ use egui_dock::{DockArea, Style as DockStyle};
 use sqlx::postgres::PgPoolOptions;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Receiver;
-use tokito::models::{ErcViolation, PartSearchParams, Position, ReplaceSchematic};
+use tokito::models::{
+    DocumentBusSegment, DocumentJunction, DocumentNetLabel, DocumentNoConnect, DocumentPin,
+    DocumentPoint, DocumentPowerSymbol, DocumentSymbol, DocumentTextItem, DocumentWireSegment,
+    ElectricalPinType, ErcViolation, MirrorMode, NetLabelKind, PartSearchParams, PinOrientation,
+    ReplaceSchematic, SchematicDocument,
+};
 use tokito::router::AppState;
 use tokito::store::intent;
 use uuid::Uuid;
 
 use crate::bootstrap::ensure_local_user;
-use crate::canvas::{snap_world_pos, CanvasSnapshot, Sym, Viewport, Wire, CANVAS_UNDO_CAP};
+use crate::canvas::{
+    display_pins_for_symbol, manhattan_bends, route_segments, snap_world_pos, symbol_pin_world,
+    BusSegment, CanvasSnapshot, Junction, NetLabel, NoConnect, PinEndpoint, PowerSymbol, Sym,
+    TextItem, Viewport, Wire, CANVAS_UNDO_CAP,
+};
 use crate::util::{guess_prefix, next_refdes};
 
 type SchematicGenerationRx = Receiver<Result<(ReplaceSchematic, Vec<ErcViolation>), String>>;
@@ -27,6 +36,12 @@ pub enum CanvasTool {
     #[default]
     Select,
     Wire,
+    NetLabel,
+    Power,
+    Junction,
+    NoConnect,
+    Bus,
+    Text,
     Pan,
 }
 
@@ -75,10 +90,24 @@ pub struct App {
     viewport: Viewport,
     symbols: Vec<Sym>,
     wires: Vec<Wire>,
+    net_labels: Vec<NetLabel>,
+    junctions: Vec<Junction>,
+    no_connects: Vec<NoConnect>,
+    power_symbols: Vec<PowerSymbol>,
+    text_items: Vec<TextItem>,
+    buses: Vec<BusSegment>,
     selected_sym: Option<String>,
     selected_wire: Option<usize>,
+    selected_wire_bend: Option<usize>,
+    selected_net_label: Option<usize>,
+    selected_junction: Option<usize>,
+    selected_no_connect: Option<usize>,
+    selected_power_symbol: Option<usize>,
+    selected_text_item: Option<usize>,
+    selected_bus: Option<usize>,
     dragging_sym: Option<String>,
-    wire_drag_from: Option<String>,
+    dragging_wire_bend: Option<(usize, usize)>,
+    wire_drag_from: Option<PinEndpoint>,
     /// Last canvas panel rect in screen space (for placing parts in view).
     canvas_screen_rect: Option<Rect>,
 
@@ -115,6 +144,8 @@ pub struct App {
     canvas_hovered_sym: Option<String>,
     /// Zoom-to-fit after layout (Home / toolbar).
     pending_zoom_fit: bool,
+    /// Focus mode hides dock chrome and gives the schematic canvas the workspace.
+    canvas_focus_mode: bool,
 
     /// Projects launcher.
     projects_search: String,
@@ -181,9 +212,23 @@ impl App {
             },
             symbols: vec![],
             wires: vec![],
+            net_labels: vec![],
+            junctions: vec![],
+            no_connects: vec![],
+            power_symbols: vec![],
+            text_items: vec![],
+            buses: vec![],
             selected_sym: None,
             selected_wire: None,
+            selected_wire_bend: None,
+            selected_net_label: None,
+            selected_junction: None,
+            selected_no_connect: None,
+            selected_power_symbol: None,
+            selected_text_item: None,
+            selected_bus: None,
             dragging_sym: None,
+            dragging_wire_bend: None,
             wire_drag_from: None,
             canvas_screen_rect: None,
             prompt: "".to_string(),
@@ -203,6 +248,7 @@ impl App {
             new_wire_net: "NET".to_string(),
             canvas_hovered_sym: None,
             pending_zoom_fit: false,
+            canvas_focus_mode: false,
             projects_search: String::new(),
             projects_sort: ProjectsSort::default(),
             projects_pinned: HashSet::new(),
@@ -215,6 +261,12 @@ impl App {
         CanvasSnapshot {
             symbols: self.symbols.clone(),
             wires: self.wires.clone(),
+            net_labels: self.net_labels.clone(),
+            junctions: self.junctions.clone(),
+            no_connects: self.no_connects.clone(),
+            power_symbols: self.power_symbols.clone(),
+            text_items: self.text_items.clone(),
+            buses: self.buses.clone(),
         }
     }
 
@@ -235,6 +287,12 @@ impl App {
         self.canvas_redo.push(cur);
         self.symbols = prev.symbols;
         self.wires = prev.wires;
+        self.net_labels = prev.net_labels;
+        self.junctions = prev.junctions;
+        self.no_connects = prev.no_connects;
+        self.power_symbols = prev.power_symbols;
+        self.text_items = prev.text_items;
+        self.buses = prev.buses;
     }
 
     fn redo_canvas(&mut self) {
@@ -246,6 +304,320 @@ impl App {
         self.canvas_undo.push(cur);
         self.symbols = next.symbols;
         self.wires = next.wires;
+        self.net_labels = next.net_labels;
+        self.junctions = next.junctions;
+        self.no_connects = next.no_connects;
+        self.power_symbols = next.power_symbols;
+        self.text_items = next.text_items;
+        self.buses = next.buses;
+    }
+
+    fn clear_canvas_selection(&mut self) {
+        self.selected_sym = None;
+        self.selected_wire = None;
+        self.selected_wire_bend = None;
+        self.selected_net_label = None;
+        self.selected_junction = None;
+        self.selected_no_connect = None;
+        self.selected_power_symbol = None;
+        self.selected_text_item = None;
+        self.selected_bus = None;
+    }
+
+    fn apply_document_to_canvas(&mut self, doc: SchematicDocument) {
+        self.symbols = doc
+            .symbols
+            .iter()
+            .map(|s| Sym {
+                ref_des: s.ref_des.clone(),
+                part_id: s.part_id,
+                pos: snap_world_pos(Pos2::new(s.position.x as f32, s.position.y as f32)),
+                rotation_deg: s.rotation as f32,
+                pins: s.pins.iter().map(|p| p.name.clone()).collect(),
+            })
+            .collect();
+
+        let mut symbols_by_id: HashMap<Uuid, String> = HashMap::new();
+        for symbol in &doc.symbols {
+            symbols_by_id.insert(symbol.id, symbol.ref_des.clone());
+        }
+
+        self.wires = doc
+            .wire_segments
+            .chunks(2)
+            .enumerate()
+            .filter_map(|(idx, chunk)| {
+                let start = chunk.first()?.start;
+                let end = chunk.last()?.end;
+                let a =
+                    self.nearest_symbol_pin_to_world(Pos2::new(start.x as f32, start.y as f32))?;
+                let b = self.nearest_symbol_pin_to_world(Pos2::new(end.x as f32, end.y as f32))?;
+                if a == b {
+                    return None;
+                }
+                Some(Wire {
+                    a: a.ref_des,
+                    a_pin: a.pin_name,
+                    b: b.ref_des,
+                    b_pin: b.pin_name,
+                    net: chunk
+                        .first()
+                        .and_then(|s| s.net_name.clone())
+                        .unwrap_or_else(|| format!("N${}", idx + 1)),
+                    bends: chunk
+                        .iter()
+                        .map(|s| Pos2::new(s.end.x as f32, s.end.y as f32))
+                        .take(chunk.len().saturating_sub(1))
+                        .collect(),
+                })
+            })
+            .collect();
+
+        self.net_labels = doc
+            .net_labels
+            .into_iter()
+            .map(|l| NetLabel {
+                name: l.name,
+                pos: Pos2::new(l.position.x as f32, l.position.y as f32),
+            })
+            .collect();
+        self.junctions = doc
+            .junctions
+            .into_iter()
+            .map(|j| Junction {
+                pos: Pos2::new(j.position.x as f32, j.position.y as f32),
+            })
+            .collect();
+        self.no_connects = doc
+            .no_connects
+            .into_iter()
+            .map(|n| NoConnect {
+                pos: Pos2::new(n.position.x as f32, n.position.y as f32),
+            })
+            .collect();
+        self.power_symbols = doc
+            .power_symbols
+            .into_iter()
+            .map(|p| PowerSymbol {
+                name: p.name,
+                pos: Pos2::new(p.position.x as f32, p.position.y as f32),
+            })
+            .collect();
+        self.text_items = doc
+            .text_items
+            .into_iter()
+            .map(|t| TextItem {
+                text: t.text,
+                pos: Pos2::new(t.position.x as f32, t.position.y as f32),
+            })
+            .collect();
+        self.buses = doc
+            .buses
+            .into_iter()
+            .map(|b| BusSegment {
+                name: b.name,
+                start: Pos2::new(b.start.x as f32, b.start.y as f32),
+                end: Pos2::new(b.end.x as f32, b.end.y as f32),
+            })
+            .collect();
+    }
+
+    fn nearest_symbol_pin_to_world(&self, world: Pos2) -> Option<PinEndpoint> {
+        let mut best: Option<(PinEndpoint, f32)> = None;
+        for sym in &self.symbols {
+            for pin_name in display_pins_for_symbol(sym, &self.wires) {
+                let pin_world = symbol_pin_world(sym, &pin_name);
+                let dist = pin_world.distance(world);
+                if dist <= 18.0 && best.as_ref().map(|(_, d)| dist < *d).unwrap_or(true) {
+                    best = Some((
+                        PinEndpoint {
+                            ref_des: sym.ref_des.clone(),
+                            pin_name,
+                        },
+                        dist,
+                    ));
+                }
+            }
+        }
+        best.map(|(pin, _)| pin)
+    }
+
+    fn endpoint_world(&self, endpoint: &PinEndpoint) -> Option<Pos2> {
+        let sym = self
+            .symbols
+            .iter()
+            .find(|s| s.ref_des == endpoint.ref_des)?;
+        Some(symbol_pin_world(sym, &endpoint.pin_name))
+    }
+
+    fn graph_to_document(&self) -> SchematicDocument {
+        let mut doc = SchematicDocument::empty();
+        doc.symbols = self
+            .symbols
+            .iter()
+            .map(|s| {
+                let pin_names = display_pins_for_symbol(s, &self.wires);
+                DocumentSymbol {
+                    id: Uuid::new_v4(),
+                    sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
+                    part_id: s.part_id,
+                    symbol_id: Some("tokito:generic".to_string()),
+                    ref_des: s.ref_des.clone(),
+                    value: self
+                        .part_cache
+                        .get(&s.part_id.unwrap_or_else(Uuid::nil))
+                        .cloned(),
+                    position: DocumentPoint {
+                        x: s.pos.x as f64,
+                        y: s.pos.y as f64,
+                    },
+                    rotation: s.rotation_deg as f64,
+                    mirror: MirrorMode::None,
+                    fields: Default::default(),
+                    footprint_ref: None,
+                    pins: pin_names
+                        .into_iter()
+                        .map(|pin_name| {
+                            let right_side = matches!(
+                                pin_name.trim().to_ascii_lowercase().as_str(),
+                                "2" | "b" | "out" | "vout" | "sda" | "scl" | "tx" | "miso"
+                            ) || pin_name.ends_with("_b");
+                            DocumentPin {
+                                number: Some(pin_name.clone()),
+                                name: pin_name,
+                                electrical_type: ElectricalPinType::Unspecified,
+                                offset: DocumentPoint {
+                                    x: if right_side { 70.0 } else { -70.0 },
+                                    y: 0.0,
+                                },
+                                orientation: if right_side {
+                                    PinOrientation::Right
+                                } else {
+                                    PinOrientation::Left
+                                },
+                                visible: true,
+                            }
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+
+        for w in &self.wires {
+            let route = match (
+                self.endpoint_world(&PinEndpoint {
+                    ref_des: w.a.clone(),
+                    pin_name: w.a_pin.clone(),
+                }),
+                self.endpoint_world(&PinEndpoint {
+                    ref_des: w.b.clone(),
+                    pin_name: w.b_pin.clone(),
+                }),
+            ) {
+                (Some(a), Some(b)) => route_segments(a, &w.bends, b),
+                _ => vec![],
+            };
+            for (start, end) in route {
+                doc.wire_segments.push(DocumentWireSegment {
+                    id: Uuid::new_v4(),
+                    sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
+                    start: DocumentPoint {
+                        x: start.x as f64,
+                        y: start.y as f64,
+                    },
+                    end: DocumentPoint {
+                        x: end.x as f64,
+                        y: end.y as f64,
+                    },
+                    net_name: Some(w.net.clone()),
+                });
+            }
+        }
+
+        doc.net_labels = self
+            .net_labels
+            .iter()
+            .map(|l| DocumentNetLabel {
+                id: Uuid::new_v4(),
+                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
+                name: l.name.clone(),
+                kind: NetLabelKind::Local,
+                position: DocumentPoint {
+                    x: l.pos.x as f64,
+                    y: l.pos.y as f64,
+                },
+                orientation: PinOrientation::Right,
+            })
+            .collect();
+        doc.junctions = self
+            .junctions
+            .iter()
+            .map(|j| DocumentJunction {
+                id: Uuid::new_v4(),
+                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
+                position: DocumentPoint {
+                    x: j.pos.x as f64,
+                    y: j.pos.y as f64,
+                },
+            })
+            .collect();
+        doc.no_connects = self
+            .no_connects
+            .iter()
+            .map(|n| DocumentNoConnect {
+                id: Uuid::new_v4(),
+                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
+                position: DocumentPoint {
+                    x: n.pos.x as f64,
+                    y: n.pos.y as f64,
+                },
+            })
+            .collect();
+        doc.power_symbols = self
+            .power_symbols
+            .iter()
+            .map(|p| DocumentPowerSymbol {
+                id: Uuid::new_v4(),
+                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
+                name: p.name.clone(),
+                position: DocumentPoint {
+                    x: p.pos.x as f64,
+                    y: p.pos.y as f64,
+                },
+            })
+            .collect();
+        doc.text_items = self
+            .text_items
+            .iter()
+            .map(|t| DocumentTextItem {
+                id: Uuid::new_v4(),
+                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
+                text: t.text.clone(),
+                position: DocumentPoint {
+                    x: t.pos.x as f64,
+                    y: t.pos.y as f64,
+                },
+                rotation: 0.0,
+            })
+            .collect();
+        doc.buses = self
+            .buses
+            .iter()
+            .map(|b| DocumentBusSegment {
+                id: Uuid::new_v4(),
+                sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
+                start: DocumentPoint {
+                    x: b.start.x as f64,
+                    y: b.start.y as f64,
+                },
+                end: DocumentPoint {
+                    x: b.end.x as f64,
+                    y: b.end.y as f64,
+                },
+                name: b.name.clone(),
+            })
+            .collect();
+        doc
     }
 
     fn load_prompt_after_open(&mut self, design_id: Uuid) {
@@ -367,63 +739,98 @@ impl App {
         let sch = self
             .rt
             .block_on(async { tokito::store::schematic::get_view(&self.pool, design_id).await });
+        let stored_doc = self
+            .rt
+            .block_on(async { tokito::store::schematic_document::get(&self.pool, design_id).await })
+            .ok()
+            .flatten();
 
         match sch {
             Ok(sch) => {
                 self.design = Some(design);
-                self.symbols = sch
-                    .instances
-                    .iter()
-                    .map(|i| Sym {
-                        ref_des: i.ref_des.clone(),
-                        part_id: i.part_id,
-                        pos: snap_world_pos(Pos2::new(
-                            i.pos_x.unwrap_or(120.0) as f32,
-                            i.pos_y.unwrap_or(120.0) as f32,
-                        )),
-                        rotation_deg: i.rotation as f32,
-                    })
-                    .collect();
+                if let Some(doc) = stored_doc {
+                    self.apply_document_to_canvas(doc);
+                } else {
+                    self.net_labels.clear();
+                    self.junctions.clear();
+                    self.no_connects.clear();
+                    self.power_symbols.clear();
+                    self.text_items.clear();
+                    self.buses.clear();
+                    self.symbols = sch
+                        .instances
+                        .iter()
+                        .map(|i| Sym {
+                            ref_des: i.ref_des.clone(),
+                            part_id: i.part_id,
+                            pos: snap_world_pos(Pos2::new(
+                                i.pos_x.unwrap_or(120.0) as f32,
+                                i.pos_y.unwrap_or(120.0) as f32,
+                            )),
+                            rotation_deg: i.rotation as f32,
+                            pins: vec!["1".to_string(), "2".to_string()],
+                        })
+                        .collect();
 
-                let net_id_to_name: HashMap<Uuid, String> =
-                    sch.nets.iter().map(|n| (n.id, n.name.clone())).collect();
-                let inst_id_to_ref: HashMap<Uuid, String> = sch
-                    .instances
-                    .iter()
-                    .map(|i| (i.id, i.ref_des.clone()))
-                    .collect();
-                let mut by_net: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
-                for p in sch.pins {
-                    by_net.entry(p.net_id).or_default().push(p.instance_id);
-                }
-                let mut wires = vec![];
-                for (net_id, insts) in by_net {
-                    let net = net_id_to_name
-                        .get(&net_id)
-                        .cloned()
-                        .unwrap_or_else(|| "NET".into());
-                    let mut uniq: Vec<Uuid> = vec![];
-                    for id in insts {
-                        if !uniq.contains(&id) {
-                            uniq.push(id);
+                    let net_id_to_name: HashMap<Uuid, String> =
+                        sch.nets.iter().map(|n| (n.id, n.name.clone())).collect();
+                    let inst_id_to_ref: HashMap<Uuid, String> = sch
+                        .instances
+                        .iter()
+                        .map(|i| (i.id, i.ref_des.clone()))
+                        .collect();
+                    let mut by_net: HashMap<Uuid, Vec<(Uuid, String)>> = HashMap::new();
+                    for p in sch.pins {
+                        by_net
+                            .entry(p.net_id)
+                            .or_default()
+                            .push((p.instance_id, p.pin_name));
+                    }
+                    let mut wires = vec![];
+                    for (net_id, inst_pins) in by_net {
+                        let net = net_id_to_name
+                            .get(&net_id)
+                            .cloned()
+                            .unwrap_or_else(|| "NET".into());
+                        let mut uniq: Vec<(Uuid, String)> = vec![];
+                        for pair in inst_pins {
+                            if !uniq.iter().any(|(id, _)| *id == pair.0) {
+                                uniq.push(pair);
+                            }
+                        }
+                        for w in uniq.windows(2) {
+                            if let (Some(a), Some(b)) =
+                                (inst_id_to_ref.get(&w[0].0), inst_id_to_ref.get(&w[1].0))
+                            {
+                                let a_pin = w[0].1.clone();
+                                let b_pin = w[1].1.clone();
+                                let a_sym = self.symbols.iter().find(|s| s.ref_des == *a);
+                                let b_sym = self.symbols.iter().find(|s| s.ref_des == *b);
+                                let bends = match (a_sym, b_sym) {
+                                    (Some(sa), Some(sb)) => manhattan_bends(
+                                        symbol_pin_world(sa, &a_pin),
+                                        symbol_pin_world(sb, &b_pin),
+                                    ),
+                                    _ => vec![],
+                                };
+                                wires.push(Wire {
+                                    a: a.clone(),
+                                    a_pin,
+                                    b: b.clone(),
+                                    b_pin,
+                                    net: net.clone(),
+                                    bends,
+                                });
+                            }
                         }
                     }
-                    for w in uniq.windows(2) {
-                        if let (Some(a), Some(b)) =
-                            (inst_id_to_ref.get(&w[0]), inst_id_to_ref.get(&w[1]))
-                        {
-                            wires.push(Wire {
-                                a: a.clone(),
-                                b: b.clone(),
-                                net: net.clone(),
-                            });
-                        }
-                    }
+                    self.wires = wires;
+                    self.net_labels.clear();
+                    self.junctions.clear();
+                    self.no_connects.clear();
                 }
-                self.wires = wires;
 
-                self.selected_sym = None;
-                self.selected_wire = None;
+                self.clear_canvas_selection();
                 self.viewport = Viewport {
                     pan: egui::Vec2::new(40.0, 40.0),
                     zoom: 1.0,
@@ -445,74 +852,29 @@ impl App {
     }
 
     fn save_schematic(&mut self, design_id: Uuid) {
-        let body = self.graph_to_replace_schematic();
+        let document = self.graph_to_document();
+        let (body, document_diagnostics) = document.to_replace_schematic();
         let warns = tokito::services::schematic_validate::erc_light(&body);
         let res = self.rt.block_on(async {
-            tokito::store::schematic::replace(&self.pool, design_id, body).await
+            tokito::store::schematic::replace(&self.pool, design_id, body).await?;
+            tokito::store::schematic_document::upsert(&self.pool, design_id, &document).await
         });
         match res {
             Ok(()) => {
                 self.err = None;
                 self.set_erc_note_from_slice(&warns);
+                for diagnostic in document_diagnostics {
+                    self.log_console(format!(
+                        "[document] {}: {}",
+                        diagnostic.code, diagnostic.message
+                    ));
+                }
                 self.log_console("Saved schematic to board.".to_string());
             }
             Err(e) => {
                 self.erc_note = None;
                 self.set_err(e);
             }
-        }
-    }
-
-    fn graph_to_replace_schematic(&self) -> ReplaceSchematic {
-        let instances = self
-            .symbols
-            .iter()
-            .map(|s| tokito::models::SchematicInstanceInput {
-                id: None,
-                ref_des: s.ref_des.clone(),
-                part_id: s.part_id,
-                position: Some(Position {
-                    x: s.pos.x as f64,
-                    y: s.pos.y as f64,
-                }),
-                rotation: f64::from(s.rotation_deg),
-                meta: None,
-            })
-            .collect::<Vec<_>>();
-
-        let net_names = self
-            .wires
-            .iter()
-            .map(|w| w.net.clone())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let nets = net_names
-            .iter()
-            .map(|n| tokito::models::SchematicNetInput {
-                id: None,
-                name: n.clone(),
-            })
-            .collect::<Vec<_>>();
-
-        let mut pins = vec![];
-        for (i, w) in self.wires.iter().enumerate() {
-            pins.push(tokito::models::SchematicPinInput {
-                instance_ref: w.a.clone(),
-                pin_name: format!("w{}_a", i),
-                net_name: w.net.clone(),
-            });
-            pins.push(tokito::models::SchematicPinInput {
-                instance_ref: w.b.clone(),
-                pin_name: format!("w{}_b", i),
-                net_name: w.net.clone(),
-            });
-        }
-
-        ReplaceSchematic {
-            instances,
-            nets,
-            pins,
         }
     }
 
@@ -570,29 +932,55 @@ impl App {
                     i.position.as_ref().map(|p| p.y).unwrap_or(120.0) as f32,
                 )),
                 rotation_deg: i.rotation as f32,
+                pins: draft
+                    .pins
+                    .iter()
+                    .filter(|p| p.instance_ref == i.ref_des)
+                    .map(|p| p.pin_name.clone())
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect(),
             })
             .collect();
-        let mut by_net: HashMap<String, Vec<String>> = HashMap::new();
+        let mut by_net: HashMap<String, Vec<(String, String)>> = HashMap::new();
         for p in draft.pins {
-            by_net.entry(p.net_name).or_default().push(p.instance_ref);
+            by_net
+                .entry(p.net_name)
+                .or_default()
+                .push((p.instance_ref, p.pin_name));
         }
         let mut wires = vec![];
-        for (net, refs) in by_net {
+        for (net, refs_pins) in by_net {
             let mut uniq = vec![];
-            for r in refs {
-                if !uniq.contains(&r) {
-                    uniq.push(r);
+            for pair in refs_pins {
+                if !uniq.iter().any(|(r, _): &(String, String)| r == &pair.0) {
+                    uniq.push(pair);
                 }
             }
             for w in uniq.windows(2) {
+                let a_sym = self.symbols.iter().find(|s| s.ref_des == w[0].0);
+                let b_sym = self.symbols.iter().find(|s| s.ref_des == w[1].0);
+                let bends = match (a_sym, b_sym) {
+                    (Some(sa), Some(sb)) => manhattan_bends(
+                        symbol_pin_world(sa, &w[0].1),
+                        symbol_pin_world(sb, &w[1].1),
+                    ),
+                    _ => vec![],
+                };
                 wires.push(Wire {
-                    a: w[0].clone(),
-                    b: w[1].clone(),
+                    a: w[0].0.clone(),
+                    a_pin: w[0].1.clone(),
+                    b: w[1].0.clone(),
+                    b_pin: w[1].1.clone(),
                     net: net.clone(),
+                    bends,
                 });
             }
         }
         self.wires = wires;
+        self.net_labels.clear();
+        self.junctions.clear();
+        self.no_connects.clear();
         self.err = None;
         self.set_erc_note_from_slice(erc_warnings);
         self.bom_dirty = true;
@@ -685,6 +1073,7 @@ impl App {
             part_id: Some(part.id),
             pos,
             rotation_deg: 0.0,
+            pins: vec!["1".to_string(), "2".to_string()],
         });
     }
 
@@ -699,6 +1088,48 @@ impl App {
             self.before_canvas_edit();
             if i < self.wires.len() {
                 self.wires.remove(i);
+            }
+            return;
+        }
+        if let Some(i) = self.selected_net_label.take() {
+            self.before_canvas_edit();
+            if i < self.net_labels.len() {
+                self.net_labels.remove(i);
+            }
+            return;
+        }
+        if let Some(i) = self.selected_junction.take() {
+            self.before_canvas_edit();
+            if i < self.junctions.len() {
+                self.junctions.remove(i);
+            }
+            return;
+        }
+        if let Some(i) = self.selected_no_connect.take() {
+            self.before_canvas_edit();
+            if i < self.no_connects.len() {
+                self.no_connects.remove(i);
+            }
+            return;
+        }
+        if let Some(i) = self.selected_power_symbol.take() {
+            self.before_canvas_edit();
+            if i < self.power_symbols.len() {
+                self.power_symbols.remove(i);
+            }
+            return;
+        }
+        if let Some(i) = self.selected_text_item.take() {
+            self.before_canvas_edit();
+            if i < self.text_items.len() {
+                self.text_items.remove(i);
+            }
+            return;
+        }
+        if let Some(i) = self.selected_bus.take() {
+            self.before_canvas_edit();
+            if i < self.buses.len() {
+                self.buses.remove(i);
             }
         }
     }

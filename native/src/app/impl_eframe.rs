@@ -103,6 +103,24 @@ impl eframe::App for App {
                     if ctx.input(|i| i.key_pressed(egui::Key::W)) {
                         self.canvas_tool = CanvasTool::Wire;
                     }
+                    if ctx.input(|i| i.key_pressed(egui::Key::N)) {
+                        self.canvas_tool = CanvasTool::NetLabel;
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::P)) {
+                        self.canvas_tool = CanvasTool::Power;
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::J)) {
+                        self.canvas_tool = CanvasTool::Junction;
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::X)) {
+                        self.canvas_tool = CanvasTool::NoConnect;
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::B)) {
+                        self.canvas_tool = CanvasTool::Bus;
+                    }
+                    if ctx.input(|i| i.key_pressed(egui::Key::T)) {
+                        self.canvas_tool = CanvasTool::Text;
+                    }
                     if ctx.input(|i| i.key_pressed(egui::Key::H)) {
                         self.canvas_tool = CanvasTool::Pan;
                     }

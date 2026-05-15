@@ -2,10 +2,11 @@ use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
 use crate::models::{
     AppendBom, CreateDesign, DesignListParams, PatchDesign, ReplaceBom, ReplaceSchematic,
+    SchematicDocument,
 };
 use crate::models::{SchematicSuggestResponse, SchematicValidationReport};
 use crate::router::AppState;
-use crate::store::{bom, designs as design_store, intent, research, schematic};
+use crate::store::{bom, designs as design_store, intent, research, schematic, schematic_document};
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
@@ -106,12 +107,14 @@ pub async fn export_design(
         let design = design_store::get(&state.pool, id).await?;
         let bom_lines = bom::list_for_design(&state.pool, id).await?;
         let schematic_view = schematic::get_view(&state.pool, id).await?;
+        let schematic_document = schematic_document::get(&state.pool, id).await?;
         let intent_row = intent::get(&state.pool, id).await?;
         let research_rows = research::list_for_design(&state.pool, id, 128).await?;
         let body = serde_json::json!({
             "design": design,
             "bom": bom_lines,
             "schematic": schematic_view,
+            "schematic_document": schematic_document,
             "intent": intent_row,
             "research_artifacts": research_rows,
         });
@@ -185,6 +188,38 @@ pub async fn put_schematic(
     let erc = crate::services::schematic_validate::erc_light(&body);
     schematic::replace(&state.pool, id, body).await?;
     Ok(Json(serde_json::json!({ "ok": true, "erc_warnings": erc })))
+}
+
+pub async fn get_schematic_document(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<SchematicDocument>> {
+    let _ = design_store::assert_visible(&state.pool, id, auth.user_id).await?;
+    if let Some(document) = schematic_document::get(&state.pool, id).await? {
+        return Ok(Json(document));
+    }
+
+    let view = schematic::get_view(&state.pool, id).await?;
+    Ok(Json(SchematicDocument::from_view(&view)))
+}
+
+pub async fn put_schematic_document(
+    State(state): State<AppState>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SchematicDocument>,
+) -> AppResult<Json<serde_json::Value>> {
+    let _ = design_store::assert_visible(&state.pool, id, auth.user_id).await?;
+    let (normalized, document_diagnostics) = body.to_replace_schematic();
+    let erc = crate::services::schematic_validate::erc_light(&normalized);
+    schematic::replace(&state.pool, id, normalized).await?;
+    schematic_document::upsert(&state.pool, id, &body).await?;
+    Ok(Json(serde_json::json!({
+        "ok": true,
+        "document_diagnostics": document_diagnostics,
+        "erc_warnings": erc
+    })))
 }
 
 #[derive(Debug, Deserialize)]

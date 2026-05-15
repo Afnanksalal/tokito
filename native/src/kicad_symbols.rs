@@ -10,6 +10,39 @@ use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
 use crate::symbols_draw::{self, CompKind};
 
+#[derive(Clone, Copy)]
+pub struct SymbolPaintSpec {
+    pub pivot: Pos2,
+    pub lw: f32,
+    pub lh: f32,
+    pub rot_deg: f32,
+    pub kind: CompKind,
+    pub ink: Color32,
+    pub stroke_px: f32,
+}
+
+impl SymbolPaintSpec {
+    pub fn new(
+        pivot: Pos2,
+        lw: f32,
+        lh: f32,
+        rot_deg: f32,
+        kind: CompKind,
+        ink: Color32,
+        stroke_px: f32,
+    ) -> Self {
+        Self {
+            pivot,
+            lw,
+            lh,
+            rot_deg,
+            kind,
+            ink,
+            stroke_px,
+        }
+    }
+}
+
 pub struct KicadSymbolLibrary {
     #[allow(dead_code)]
     pub path: PathBuf,
@@ -73,28 +106,45 @@ impl KicadSymbolLibrary {
         None
     }
 
-    pub fn paint_kind_or_fallback(
-        &self,
-        painter: &Painter,
-        pivot: Pos2,
-        lw: f32,
-        lh: f32,
-        rot_deg: f32,
-        kind: CompKind,
-        ink: Color32,
-        stroke_px: f32,
-    ) {
-        let Some(sym_name) = self.resolve_symbol_name_for_kind(kind) else {
-            symbols_draw::paint_symbol_body(painter, pivot, lw, lh, rot_deg, kind, ink, stroke_px);
+    pub fn paint_kind_or_fallback(&self, painter: &Painter, spec: SymbolPaintSpec) {
+        let Some(sym_name) = self.resolve_symbol_name_for_kind(spec.kind) else {
+            symbols_draw::paint_symbol_body(
+                painter,
+                spec.pivot,
+                spec.lw,
+                spec.lh,
+                spec.rot_deg,
+                spec.kind,
+                spec.ink,
+                spec.stroke_px,
+            );
             return;
         };
         let Some(sym) = self.by_full_name.get(&sym_name) else {
-            symbols_draw::paint_symbol_body(painter, pivot, lw, lh, rot_deg, kind, ink, stroke_px);
+            symbols_draw::paint_symbol_body(
+                painter,
+                spec.pivot,
+                spec.lw,
+                spec.lh,
+                spec.rot_deg,
+                spec.kind,
+                spec.ink,
+                spec.stroke_px,
+            );
             return;
         };
 
-        if !paint_kicad_symbol_graphics(painter, pivot, lw, lh, rot_deg, sym, ink, stroke_px) {
-            symbols_draw::paint_symbol_body(painter, pivot, lw, lh, rot_deg, kind, ink, stroke_px);
+        if !paint_kicad_symbol_graphics(painter, spec, sym) {
+            symbols_draw::paint_symbol_body(
+                painter,
+                spec.pivot,
+                spec.lw,
+                spec.lh,
+                spec.rot_deg,
+                spec.kind,
+                spec.ink,
+                spec.stroke_px,
+            );
         }
     }
 }
@@ -105,13 +155,8 @@ fn short_name(full: &str) -> &str {
 
 fn paint_kicad_symbol_graphics(
     painter: &Painter,
-    pivot: Pos2,
-    lw: f32,
-    lh: f32,
-    rot_deg: f32,
+    spec: SymbolPaintSpec,
     sym: &kiutils_kicad::Symbol,
-    ink: Color32,
-    stroke_px: f32,
 ) -> bool {
     // If there are no graphics, there is nothing to render.
     if sym.graphics.is_empty() {
@@ -142,17 +187,17 @@ fn paint_kicad_symbol_graphics(
 
     // Fit into the target box. KiCad units are arbitrary here; we just normalize.
     // Flip Y because KiCad's +Y is typically "up", while egui's +Y is "down".
-    let sx = (lw * 1.6) / w;
-    let sy = (lh * 1.6) / h;
+    let sx = (spec.lw * 1.6) / w;
+    let sy = (spec.lh * 1.6) / h;
     let s = sx.min(sy);
     let center = Pos2::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5);
 
-    let stroke = Stroke::new(stroke_px.clamp(1.0, 3.5), ink);
+    let stroke = Stroke::new(spec.stroke_px.clamp(1.0, 3.5), spec.ink);
 
     let xf = |p: Pos2| -> Pos2 {
-        let px = (p.x - center.x) as f32 * s;
-        let py = -((p.y - center.y) as f32) * s;
-        symbols_draw::xf_public(Pos2::new(px, py), pivot, rot_deg)
+        let px = (p.x - center.x) * s;
+        let py = -(p.y - center.y) * s;
+        symbols_draw::xf_public(Pos2::new(px, py), spec.pivot, spec.rot_deg)
     };
 
     for g in &sym.graphics {
@@ -268,4 +313,3 @@ fn paint_arc_approx(
         prev = p;
     }
 }
-

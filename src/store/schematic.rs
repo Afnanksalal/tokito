@@ -1,6 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    ReplaceSchematic, SchematicInstance, SchematicNet, SchematicPin, SchematicView,
+    ReplaceSchematic, SchematicDocument, SchematicInstance, SchematicNet, SchematicPin,
+    SchematicView,
 };
 use serde_json::json;
 use sqlx::PgPool;
@@ -159,5 +160,8 @@ pub async fn replace(pool: &PgPool, design_id: Uuid, body: ReplaceSchematic) -> 
     }
 
     tx.commit().await?;
+
+    let document = SchematicDocument::from_replace_schematic(&body);
+    crate::store::schematic_document::upsert(pool, design_id, &document).await?;
     Ok(())
 }

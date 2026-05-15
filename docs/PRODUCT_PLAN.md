@@ -63,6 +63,8 @@ This document tracks **stages**, **quality bars**, and what is **already shipped
 
 **Quality bar:** Predictable shortcuts; capped undo stack for memory safety.
 
+**Next:** The current canvas is a foundation, not the final schematic editor. See **[EDITOR_PLAN.md](EDITOR_PLAN.md)** for the production editor direction: pin-aware schematic geometry, KiCad-like primitives, Altium-style contextual panels, Flux-style copilot actions, and staged implementation milestones.
+
 ---
 
 ## Stage 5 — Electrical validity beyond topology 🔄

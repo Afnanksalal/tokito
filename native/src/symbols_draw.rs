@@ -1,4 +1,4 @@
-//! ECAD-style symbol strokes (IEC-ish) drawn inside each component rect.
+//! ECAD-style schematic symbol strokes.
 
 use egui::{Color32, Painter, Pos2, Rect, Stroke};
 
@@ -140,7 +140,7 @@ pub fn paint_symbol_body(
             let h = lh * 1.22;
             let tl = xf(Pos2::new(-w, -h), pivot, rot_deg);
             let br = xf(Pos2::new(w, h), pivot, rot_deg);
-            painter.rect_stroke(Rect::from_two_pos(tl, br), 4.0, stroke);
+            painter.rect_stroke(Rect::from_two_pos(tl, br), 0.0, stroke);
             let pins = 6usize;
             for i in 0..pins {
                 let ty = -h + (2.0 * h) * (i as f32 + 0.5) / pins as f32;
@@ -156,7 +156,7 @@ pub fn paint_symbol_body(
             let h = lh * 1.05;
             let tl = xf(Pos2::new(-w, -h), pivot, rot_deg);
             let br = xf(Pos2::new(w, h), pivot, rot_deg);
-            painter.rect_stroke(Rect::from_two_pos(tl, br), 6.0, stroke);
+            painter.rect_stroke(Rect::from_two_pos(tl, br), 0.0, stroke);
             seg(Pos2::new(-lw * 1.12, 0.0), Pos2::new(-w, 0.0));
             seg(Pos2::new(w, 0.0), Pos2::new(lw * 1.12, 0.0));
         }

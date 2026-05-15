@@ -166,6 +166,48 @@ Validation rules:
 
 ---
 
+### `GET /v1/designs/:id/schematic/document`
+
+Returns the editor-grade schematic document used by the production canvas. This includes sheet metadata, placed symbols with pin geometry, wire segments, junctions, labels, power symbols, no-connect markers, text, buses, and ERC markers.
+
+If a document has not been saved yet, the server derives one from the normalized schematic graph so older designs still open in the new editor.
+
+### `PUT /v1/designs/:id/schematic/document`
+
+Persists the editor document and derives the normalized schematic graph used by existing API/export paths. This is the preferred endpoint for schematic editor clients.
+
+Minimal shape:
+
+```json
+{
+  "schema_version": 1,
+  "sheets": [{ "id": "root", "name": "Root", "path": "/", "page_size": { "width": 1160, "height": 820 }, "grid": 40, "title_block": {} }],
+  "symbols": [],
+  "wire_segments": [],
+  "junctions": [],
+  "net_labels": [],
+  "power_symbols": [],
+  "no_connects": [],
+  "text_items": [],
+  "buses": [],
+  "erc_markers": []
+}
+```
+
+**200** body:
+
+```json
+{
+  "ok": true,
+  "document_diagnostics": [],
+  "erc_warnings": []
+}
+```
+
+`document_diagnostics` report geometry-to-netlist issues such as conflicting labels on the same connected node. Invalid derived topology returns **400**.
+
+---
+
 ### `POST /v1/designs/:id/schematic/suggest`
 
 **Copilot entrypoint** (same orchestration as **Generate** in the native app).

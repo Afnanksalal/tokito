@@ -163,6 +163,10 @@ pub fn build(
             get(handlers::get_schematic).put(handlers::put_schematic),
         )
         .route(
+            "/designs/:id/schematic/document",
+            get(handlers::get_schematic_document).put(handlers::put_schematic_document),
+        )
+        .route(
             "/designs/:id/schematic/suggest",
             post(handlers::suggest_schematic),
         )

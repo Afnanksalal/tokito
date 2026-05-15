@@ -9,3 +9,4 @@ pub mod offers;
 pub mod parts;
 pub mod research;
 pub mod schematic;
+pub mod schematic_document;

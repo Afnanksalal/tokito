@@ -11,6 +11,7 @@ Technical documentation for **Tokito**—the API, system shape, and product road
 | [**API.md**](API.md) | Integrators, frontend authors | REST routes under `/v1`, JSON bodies, errors, copilot endpoints |
 | [**ARCHITECTURE.md**](ARCHITECTURE.md) | Contributors, operators | Layers (HTTP → handlers → services → store), Postgres model, migrations |
 | [**PRODUCT_PLAN.md**](PRODUCT_PLAN.md) | Product & engineering | Staged roadmap (intent → research → grounded schematic → canvas → ERC → exports), implementation status |
+| [**EDITOR_PLAN.md**](EDITOR_PLAN.md) | Product & engineering | Production schematic editor direction: data model, CAD UI, canvas tools, ERC, and implementation milestones |
 
 ---
 
