@@ -839,15 +839,14 @@ impl App {
             if sym.symbol_id.is_none() {
                 sym.symbol_id = symbol_id;
             }
-            if sym.symbol_id.is_some() || sym.pin_layout.is_empty() {
-                sym.pin_layout = pin_layout.clone();
-            } else if sym
-                .pin_layout
-                .iter()
-                .map(|(_, x, y)| x.abs().max(y.abs()))
-                .fold(0.0_f32, f32::max)
-                < 20.0
-            {
+            let layout_tiny = sym.pin_layout.is_empty()
+                || sym
+                    .pin_layout
+                    .iter()
+                    .map(|(_, x, y)| x.abs().max(y.abs()))
+                    .fold(0.0_f32, f32::max)
+                    < 20.0;
+            if sym.symbol_id.is_some() || layout_tiny {
                 sym.pin_layout = pin_layout.clone();
             }
             if sym.pins.is_empty() && !sym.pin_layout.is_empty() {

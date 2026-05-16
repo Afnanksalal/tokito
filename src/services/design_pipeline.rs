@@ -1,8 +1,4 @@
-//! Prompt → plan (xAI) → Firecrawl web search → research artifacts →
-//! Design pipeline: plan, research, resolve BOM, generate schematic.
-//!
-//! AI build pipeline: intent → research → BOM → schematic proposal.
-//! datasheet-backed catalog population first.
+//! AI build: plan → Firecrawl research → BOM resolution → schematic proposal.
 
 use crate::error::{AppError, AppResult};
 use crate::models::{
