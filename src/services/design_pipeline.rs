@@ -1,7 +1,7 @@
 //! Prompt → plan (xAI) → Firecrawl web search → research artifacts →
 //! Design pipeline: plan, research, resolve BOM, generate schematic.
 //!
-//! This is the canonical AI build path: no standalone generate without
+//! AI build pipeline: intent → research → BOM → schematic proposal.
 //! datasheet-backed catalog population first.
 
 use crate::error::{AppError, AppResult};

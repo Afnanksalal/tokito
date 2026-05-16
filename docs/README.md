@@ -1,7 +1,8 @@
 # Documentation
 
-- **[README](../README.md)** — Install, first run, shortcuts, configuration (start here).
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** — How the desktop app, local database, and AI pipeline fit together.
-- **[API.md](API.md)** — Maintainer reference for the optional HTTP layer exercised in CI (not the main user experience).
+- **[README](../README.md)** — Install, shortcuts, configuration (start here).
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — Desktop app, local database, AI pipeline.
+- **[SCHEMATIC_EDITOR.md](SCHEMATIC_EDITOR.md)** — Canvas editor, connectivity, symbols, exports.
+- **[API.md](API.md)** — Optional HTTP layer for CI and advanced setups.
 
-Contributors: see [CONTRIBUTING.md](../CONTRIBUTING.md).
+Contributors: [CONTRIBUTING.md](../CONTRIBUTING.md). Security: [SECURITY.md](../SECURITY.md).

@@ -4,12 +4,12 @@ use egui::{Pos2, Rect, Response, Ui, Vec2};
 
 use super::hit_test::{
     hover_at, pick_bus, pick_erc_marker, pick_junction, pick_net_label, pick_no_connect,
-    pick_pin_on_symbol, pick_power_symbol, pick_text_item, pick_wire_segment, HoverState,
-    PIN_HIT_RADIUS,
+    pick_power_symbol, pick_text_item, pick_wire_segment, HoverState,
 };
 use super::state::SchematicEditor;
 use super::tools::CanvasTool;
-use crate::canvas::{manhattan_segments, symbol_pin_world, PinEndpoint};
+use super::wire_snap::{wire_snap_at, WireSnap};
+use crate::canvas::{snap_symbol_pins_to_grid, symbol_hit_half_extents};
 use crate::util;
 
 pub struct InteractionResult {
@@ -56,21 +56,24 @@ pub fn handle(
     let mut clicked_any = false;
     let mut result = InteractionResult::none();
 
-    // Box select (select tool, empty canvas drag).
+    // Marquee selection (Select tool, drag on empty canvas). Primary drag no longer pans — use
+    // middle mouse or hold Space to pan (see editor::show).
     if matches!(editor.tool, CanvasTool::Select) {
+        let box_active = editor.box_select_start.is_some();
         if canvas_resp.drag_started() {
-            if let Some(mp) = pointer {
-                if !symbol_hit(editor, mp, origin)
-                    && pick_wire_segment(mp, origin, &editor.viewport, &editor.wire_segments, 12.0)
-                        .is_none()
-                {
+            if let Some(mp) = pointer.filter(|p| rect.contains(*p)) {
+                let on_symbol = symbol_hit(editor, mp, origin);
+                let on_wire =
+                    pick_wire_segment(mp, origin, &editor.viewport, &editor.wire_segments, 12.0)
+                        .is_some();
+                if !on_symbol && !on_wire {
                     editor.box_select_start =
                         Some(editor.snap_world(editor.viewport.screen_to_world(origin, mp)));
                     editor.box_select_current = editor.box_select_start;
                 }
             }
         }
-        if canvas_resp.dragged() {
+        if box_active || editor.box_select_start.is_some() {
             if let (Some(_), Some(mp)) = (editor.box_select_start, pointer) {
                 editor.box_select_current =
                     Some(editor.snap_world(editor.viewport.screen_to_world(origin, mp)));
@@ -78,8 +81,10 @@ pub fn handle(
         }
         if canvas_resp.drag_stopped() {
             if let (Some(a), Some(b)) = (editor.box_select_start, editor.box_select_current) {
-                apply_box_select(editor, a, b, shift);
-                clicked_any = true;
+                if a.distance(b) > 4.0 {
+                    apply_box_select(editor, a, b, shift);
+                    clicked_any = true;
+                }
             }
             editor.box_select_start = None;
             editor.box_select_current = None;
@@ -99,7 +104,7 @@ pub fn handle(
                     } else {
                         req.pin_layout.iter().map(|(n, _, _)| n.clone()).collect()
                     };
-                    editor.symbols.push(crate::canvas::Sym {
+                    let mut sym = crate::canvas::Sym {
                         ref_des: ref_des.clone(),
                         part_id: req.part_id,
                         pos: world,
@@ -108,7 +113,11 @@ pub fn handle(
                         footprint_ref: None,
                         symbol_id: req.symbol_id.clone(),
                         pin_layout: req.pin_layout.clone(),
-                    });
+                        value: req.default_value.clone(),
+                        fields: std::collections::BTreeMap::new(),
+                    };
+                    snap_symbol_pins_to_grid(&mut sym);
+                    editor.symbols.push(sym);
                     editor.clear_selection();
                     editor.selected_syms.insert(ref_des);
                     editor.selected_sym = editor.selected_syms.iter().next().cloned();
@@ -119,49 +128,57 @@ pub fn handle(
         }
     }
 
-    // Wire tool: pin-first, chain segments
+    // Wire tool: pins, junctions, and wire endpoints only
     if matches!(editor.tool, CanvasTool::Wire) {
         if canvas_resp.clicked() {
             if let Some(mp) = pointer.filter(|p| rect.contains(*p)) {
-                let net = editor.new_wire_net.trim().to_string();
-                let net = if net.is_empty() {
-                    "NET".to_string()
-                } else {
-                    net
-                };
-                if let Some(pin) = pick_pin_at(editor, mp, origin) {
+                let net = editor.inherited_wire_net();
+                if let Some(snap) = wire_snap_at(
+                    mp,
+                    origin,
+                    &editor.viewport,
+                    &editor.symbols,
+                    &editor.wire_segments,
+                    &editor.junctions,
+                    &editor.wire_segments,
+                ) {
                     clicked_any = true;
-                    if let Some(from) = editor.wire_drag_from.take() {
-                        if from != pin {
-                            editor.before_edit();
-                            editor.push_wire_between(from, pin, net);
-                            editor.wire_chain_last = None;
-                            result = InteractionResult::msg("Added wire.");
+                    match snap {
+                        WireSnap::Pin(pin) => {
+                            if let Some(from) = editor.wire_drag_from.clone() {
+                                if from != pin {
+                                    editor.before_edit();
+                                    editor.commit_wire_to_pin(from, pin, net);
+                                    editor.refresh_wire_connectivity();
+                                    result = InteractionResult::msg("Added wire.");
+                                }
+                            } else {
+                                editor.before_edit();
+                                editor.start_wire_from_pin(pin);
+                                editor.clear_selection();
+                            }
                         }
-                    } else {
-                        editor.wire_drag_from = Some(pin.clone());
-                        editor.wire_chain_last = editor.endpoint_world(&pin);
-                        editor.clear_selection();
+                        WireSnap::Junction(world) | WireSnap::WireEnd { world, .. } => {
+                            if editor.wire_drag_from.is_some() {
+                                let world = editor.snap_world(world);
+                                editor.before_edit();
+                                let start = editor
+                                    .wire_chain_last
+                                    .or_else(|| {
+                                        editor
+                                            .wire_drag_from
+                                            .as_ref()
+                                            .and_then(|p| editor.endpoint_world(p))
+                                    })
+                                    .unwrap_or(world);
+                                editor.push_segments_between(start, world, net);
+                                editor.wire_chain_last = Some(
+                                    editor.wire_segments.last().map(|s| s.end).unwrap_or(world),
+                                );
+                                editor.refresh_wire_connectivity();
+                            }
+                        }
                     }
-                } else if editor.wire_drag_from.is_some() {
-                    let world = editor.snap_world(editor.viewport.screen_to_world(origin, mp));
-                    editor.before_edit();
-                    let start = editor
-                        .wire_chain_last
-                        .or_else(|| {
-                            editor
-                                .wire_drag_from
-                                .as_ref()
-                                .and_then(|p| editor.endpoint_world(p))
-                        })
-                        .unwrap_or(world);
-                    for seg in manhattan_segments(start, world, net.clone()) {
-                        editor.maybe_add_junction(seg.start);
-                        editor.maybe_add_junction(seg.end);
-                        editor.wire_segments.push(seg);
-                    }
-                    editor.wire_chain_last = Some(world);
-                    clicked_any = true;
                 }
             }
         }
@@ -173,14 +190,16 @@ pub fn handle(
         let p = editor
             .viewport
             .world_to_screen(origin, editor.symbols[i].pos);
-        let size = Vec2::new(140.0 * editor.viewport.zoom, 62.0 * editor.viewport.zoom);
+        let z = editor.viewport.zoom;
+        let (hx, hy) = symbol_hit_half_extents(&editor.symbols[i]);
+        let size = Vec2::new(hx * 2.0 * z, hy * 2.0 * z);
         let r = Rect::from_center_size(p, size);
         let id = ui.id().with(("sym", ref_des.as_str()));
 
-        let sense = if matches!(editor.tool, CanvasTool::Pan) {
-            egui::Sense::click()
-        } else {
-            egui::Sense::click_and_drag()
+        let sense = match editor.tool {
+            CanvasTool::Wire | CanvasTool::PlaceSymbol => egui::Sense::hover(),
+            CanvasTool::Pan => egui::Sense::click(),
+            _ => egui::Sense::click_and_drag(),
         };
         let sym_resp = ui.interact(r, id, sense);
 
@@ -193,24 +212,53 @@ pub fn handle(
             }
             editor.selected_syms.insert(ref_des.clone());
             editor.selected_sym = Some(ref_des.clone());
-            editor.wire_drag_from = None;
+            editor.cancel_wire_tool();
             clicked_any = true;
         }
 
         if matches!(editor.tool, CanvasTool::Select) && sym_resp.drag_started() {
             editor.before_edit();
-            editor.dragging_sym = Some(ref_des.clone());
+            if editor.selected_syms.contains(&ref_des) && editor.selected_syms.len() > 1 {
+                editor.dragging_sym = None;
+            } else {
+                editor.dragging_sym = Some(ref_des.clone());
+            }
         }
-        if matches!(editor.tool, CanvasTool::Select)
-            && sym_resp.dragged()
-            && editor.dragging_sym.as_deref() == Some(ref_des.as_str())
-        {
+        if matches!(editor.tool, CanvasTool::Select) && sym_resp.dragged() {
             let delta = sym_resp.drag_delta() / editor.viewport.zoom;
-            editor.symbols[i].pos += delta;
+            if editor.selected_syms.contains(&ref_des) && editor.selected_syms.len() > 1 {
+                let refs: std::collections::HashSet<String> =
+                    editor.selected_syms.iter().cloned().collect();
+                for rd in &refs {
+                    if let Some(idx) = editor.symbols.iter().position(|s| s.ref_des == *rd) {
+                        editor.symbols[idx].pos += delta;
+                    }
+                }
+                editor.push_wires_for_moved_symbols(&refs, delta);
+                editor.sync_anchored_wire_endpoints();
+            } else if editor.dragging_sym.as_deref() == Some(ref_des.as_str()) {
+                editor.symbols[i].pos += delta;
+                let mut refs = std::collections::HashSet::new();
+                refs.insert(ref_des.clone());
+                editor.push_wires_for_moved_symbols(&refs, delta);
+                editor.sync_anchored_wire_endpoints();
+            }
         }
         if sym_resp.drag_stopped() {
+            if editor.selected_syms.contains(&ref_des) && editor.selected_syms.len() > 1 {
+                let refs: Vec<String> = editor.selected_syms.iter().cloned().collect();
+                for rd in refs {
+                    if let Some(idx) = editor.symbols.iter().position(|s| s.ref_des == rd) {
+                        let pos = editor.snap_world(editor.symbols[idx].pos);
+                        editor.symbols[idx].pos = pos;
+                    }
+                }
+            } else if editor.dragging_sym.as_deref() == Some(ref_des.as_str()) {
+                editor.symbols[i].pos = editor.snap_world(editor.symbols[i].pos);
+            }
             editor.dragging_sym = None;
-            editor.symbols[i].pos = editor.snap_world(editor.symbols[i].pos);
+            editor.sync_wires_after_symbol_move();
+            editor.refresh_wire_connectivity();
         }
     }
 
@@ -235,8 +283,10 @@ pub fn handle(
                                 if let Some(s) = editor.wire_segments.get_mut(idx) {
                                     if end {
                                         s.end = world;
+                                        s.end_pin = None;
                                     } else {
                                         s.start = world;
+                                        s.start_pin = None;
                                     }
                                 }
                             }
@@ -246,7 +296,9 @@ pub fn handle(
             }
         }
         if ui.input(|i| i.pointer.any_released()) {
-            editor.dragging_segment_endpoint = None;
+            if let Some((idx, is_end)) = editor.dragging_segment_endpoint.take() {
+                editor.finish_segment_endpoint_drag(idx, is_end);
+            }
         }
     }
 
@@ -266,6 +318,25 @@ pub fn handle(
                         },
                         pos: world,
                         kind: editor.label_kind,
+                    });
+                    editor.clear_selection();
+                    editor.selected_net_label = Some(editor.net_labels.len() - 1);
+                    clicked_any = true;
+                }
+                CanvasTool::SheetPort => {
+                    editor.before_edit();
+                    let name = editor.new_wire_net.trim();
+                    let name = if name.is_empty() {
+                        format!("{}/NET", editor.active_sheet_id)
+                    } else if name.contains('/') {
+                        name.to_string()
+                    } else {
+                        format!("{}/{}", editor.active_sheet_id, name)
+                    };
+                    editor.net_labels.push(crate::canvas::NetLabel {
+                        name,
+                        pos: world,
+                        kind: tokito::models::NetLabelKind::Hierarchical,
                     });
                     editor.clear_selection();
                     editor.selected_net_label = Some(editor.net_labels.len() - 1);
@@ -343,7 +414,7 @@ pub fn handle(
                         editor.clear_selection();
                     }
                     editor.select_net_for_segment(si);
-                    editor.wire_drag_from = None;
+                    editor.cancel_wire_tool();
                     picked = true;
                 }
             }
@@ -404,8 +475,7 @@ pub fn handle(
             if !picked && !shift {
                 editor.clear_selection();
                 if !matches!(editor.tool, CanvasTool::Wire) {
-                    editor.wire_drag_from = None;
-                    editor.wire_chain_last = None;
+                    editor.cancel_wire_tool();
                 }
             }
         }
@@ -417,7 +487,9 @@ pub fn handle(
 fn symbol_hit(editor: &SchematicEditor, pointer: Pos2, origin: Pos2) -> bool {
     for sym in &editor.symbols {
         let center = editor.viewport.world_to_screen(origin, sym.pos);
-        let size = Vec2::new(140.0 * editor.viewport.zoom, 62.0 * editor.viewport.zoom);
+        let z = editor.viewport.zoom;
+        let (hx, hy) = symbol_hit_half_extents(sym);
+        let size = Vec2::new(hx * 2.0 * z, hy * 2.0 * z);
         if Rect::from_center_size(center, size).contains(pointer) {
             return true;
         }
@@ -426,60 +498,70 @@ fn symbol_hit(editor: &SchematicEditor, pointer: Pos2, origin: Pos2) -> bool {
 }
 
 fn apply_box_select(editor: &mut SchematicEditor, a: Pos2, b: Pos2, add: bool) {
+    use super::geometry::{segment_in_marquee, symbol_in_marquee};
+
     let r = Rect::from_two_pos(a, b);
     let enclosed = a.x <= b.x;
     if !add {
         editor.clear_selection();
     }
-    for sym in &editor.symbols {
-        let hit = if enclosed {
-            r.contains(sym.pos)
-        } else {
-            r.intersects(Rect::from_center_size(sym.pos, Vec2::splat(80.0)))
-        };
-        if hit {
-            editor.selected_syms.insert(sym.ref_des.clone());
-            editor.selected_sym = Some(sym.ref_des.clone());
-        }
-    }
-    for (i, seg) in editor.wire_segments.iter().enumerate() {
-        let hit = if enclosed {
-            r.contains(seg.start) && r.contains(seg.end)
-        } else {
-            util::dist_point_to_segment_px(
-                Pos2::new(r.center().x, r.center().y),
-                seg.start,
-                seg.end,
-            ) < 80.0
-                || r.contains(seg.start)
-                || r.contains(seg.end)
-        };
-        if hit {
-            editor.selected_segments.insert(i);
-            editor.selected_segment = Some(i);
-        }
-    }
-}
-
-fn pick_pin_at(editor: &SchematicEditor, pointer: Pos2, origin: Pos2) -> Option<PinEndpoint> {
-    let mut best: Option<(PinEndpoint, f32)> = None;
-    for sym in &editor.symbols {
-        if let Some(pin) = pick_pin_on_symbol(
-            pointer,
-            origin,
-            &editor.viewport,
-            sym,
-            &editor.wire_segments,
-        ) {
-            let pin_world = symbol_pin_world(sym, &pin.pin_name);
-            let d = editor
-                .viewport
-                .world_to_screen(origin, pin_world)
-                .distance(pointer);
-            if d <= PIN_HIT_RADIUS && best.as_ref().map(|(_, bd)| d < *bd).unwrap_or(true) {
-                best = Some((pin, d));
+    if editor.selection_filter.allows_symbols() {
+        for sym in &editor.symbols {
+            if symbol_in_marquee(sym, r, enclosed) {
+                editor.selected_syms.insert(sym.ref_des.clone());
+                editor.selected_sym = Some(sym.ref_des.clone());
             }
         }
     }
-    best.map(|(p, _)| p)
+    if editor.selection_filter.allows_wires() {
+        for (i, seg) in editor.wire_segments.iter().enumerate() {
+            if segment_in_marquee(seg, r, enclosed) {
+                editor.selected_segments.insert(i);
+                editor.selected_segment = Some(i);
+            }
+        }
+        for (i, bus) in editor.buses.iter().enumerate() {
+            let hit = if enclosed {
+                r.contains(bus.start) && r.contains(bus.end)
+            } else {
+                segment_in_marquee(
+                    &crate::canvas::WireSegment::new(bus.start, bus.end, ""),
+                    r,
+                    false,
+                )
+            };
+            if hit {
+                editor.selected_bus = Some(i);
+            }
+        }
+    }
+    if editor.selection_filter.allows_labels() {
+        for (i, label) in editor.net_labels.iter().enumerate() {
+            if r.contains(label.pos) {
+                editor.selected_net_label = Some(i);
+            }
+        }
+        for (i, pwr) in editor.power_symbols.iter().enumerate() {
+            if r.contains(pwr.pos) {
+                editor.selected_power_symbol = Some(i);
+            }
+        }
+    }
+    if editor.selection_filter.allows_annotations() {
+        for (i, j) in editor.junctions.iter().enumerate() {
+            if r.contains(j.pos) {
+                editor.selected_junction = Some(i);
+            }
+        }
+        for (i, nc) in editor.no_connects.iter().enumerate() {
+            if r.contains(nc.pos) {
+                editor.selected_no_connect = Some(i);
+            }
+        }
+        for (i, t) in editor.text_items.iter().enumerate() {
+            if r.contains(t.pos) {
+                editor.selected_text_item = Some(i);
+            }
+        }
+    }
 }

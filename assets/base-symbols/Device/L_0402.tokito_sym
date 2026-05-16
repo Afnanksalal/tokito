@@ -20,8 +20,8 @@
 			(effects (font (size 1.27 1.27))))
 		(symbol "L_0402_0_1"
 			(rectangle
-				(start --1 -2.5)
-				(end -1 2.5)
+				(start -1 -2.5)
+				(end 1 2.5)
 				(stroke (width 0.254) (type default))
 				(fill (type none))))
 		(symbol "L_0402_1_1"

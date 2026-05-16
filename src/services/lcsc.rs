@@ -8,20 +8,49 @@ use crate::router::AppState;
 use crate::services::footprint_map;
 use serde_json::Value;
 
+const MAX_QUERY_LEN: usize = 128;
+
+fn sanitize_lcsc_query(q: &str) -> Option<String> {
+    let t = q.trim();
+    if t.is_empty() || t.len() > MAX_QUERY_LEN {
+        return None;
+    }
+    if t.chars().any(|c| c.is_control()) {
+        return None;
+    }
+    Some(t.to_string())
+}
+
 /// Catalog rows for search and footprint hints.
 pub async fn search_catalog(state: &AppState, mpn: &str, limit: usize) -> Vec<CatalogPartHit> {
     if !state.lcsc_anonymous_search {
+        tracing::debug!("LCSC catalog search disabled (TOKITO_LCSC_ANONYMOUS_SEARCH=false)");
         return Vec::new();
     }
-    let url = format!(
-        "https://lcsc.com/api/global/additional/search?q={}",
-        urlencoding::encode(mpn)
-    );
-    let Ok(res) = state.http.get(&url).send().await else {
+    let Some(q) = sanitize_lcsc_query(mpn) else {
         return Vec::new();
     };
-    let Ok(v) = res.json::<Value>().await else {
+    let url = format!(
+        "https://lcsc.com/api/global/additional/search?q={}",
+        urlencoding::encode(&q)
+    );
+    let res = match state.http.get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "LCSC catalog HTTP failed");
+            return Vec::new();
+        }
+    };
+    if !res.status().is_success() {
+        tracing::warn!(status = %res.status(), "LCSC catalog HTTP status");
         return Vec::new();
+    }
+    let v = match res.json::<Value>().await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "LCSC catalog JSON parse failed");
+            return Vec::new();
+        }
     };
     extract_catalog_from_lcsc_json(&v, limit)
 }
@@ -30,9 +59,12 @@ pub async fn search_offers(state: &AppState, mpn: &str) -> Vec<UpsertOffer> {
     if !state.lcsc_anonymous_search {
         return Vec::new();
     }
+    let Some(q) = sanitize_lcsc_query(mpn) else {
+        return Vec::new();
+    };
     let url = format!(
         "https://lcsc.com/api/global/additional/search?q={}",
-        urlencoding::encode(mpn)
+        urlencoding::encode(&q)
     );
     let Ok(res) = state.http.get(&url).send().await else {
         return Vec::new();
@@ -40,7 +72,7 @@ pub async fn search_offers(state: &AppState, mpn: &str) -> Vec<UpsertOffer> {
     let Ok(v) = res.json::<Value>().await else {
         return Vec::new();
     };
-    extract_offers_from_lcsc_json(&v, mpn)
+    extract_offers_from_lcsc_json(&v, &q)
 }
 
 fn extract_offers_from_lcsc_json(v: &Value, q: &str) -> Vec<UpsertOffer> {
@@ -188,4 +220,20 @@ fn push_if_product(item: &Value, out: &mut Vec<UpsertOffer>) {
         unit_price_cents: None,
         stock_qty: item.get("stock").and_then(|x| x.as_i64()),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_lcsc_query;
+
+    #[test]
+    fn sanitize_rejects_empty_and_control_chars() {
+        assert!(sanitize_lcsc_query("").is_none());
+        assert!(sanitize_lcsc_query("  \t ").is_none());
+        assert!(sanitize_lcsc_query("STM32\x00").is_none());
+        assert_eq!(
+            sanitize_lcsc_query(" STM32F103 ").as_deref(),
+            Some("STM32F103")
+        );
+    }
 }

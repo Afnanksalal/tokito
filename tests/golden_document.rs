@@ -48,6 +48,9 @@ fn document_wire_segments_derive_pin_connectivity() {
             start: DocumentPoint { x: -70.0, y: 0.0 },
             end: DocumentPoint { x: 0.0, y: 0.0 },
             net_name: Some("NET1".into()),
+            net_id: None,
+            start_pin: None,
+            end_pin: None,
         },
         DocumentWireSegment {
             id: Uuid::new_v4(),
@@ -55,6 +58,9 @@ fn document_wire_segments_derive_pin_connectivity() {
             start: DocumentPoint { x: 0.0, y: 0.0 },
             end: DocumentPoint { x: 70.0, y: 0.0 },
             net_name: Some("NET1".into()),
+            net_id: None,
+            start_pin: None,
+            end_pin: None,
         },
     ];
     let (body, diags) = doc.to_replace_schematic();

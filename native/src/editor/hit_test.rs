@@ -4,13 +4,13 @@ use egui::{Pos2, Rect, Vec2};
 
 use crate::canvas::Viewport;
 use crate::canvas::{
-    display_pins_for_symbol, symbol_pin_world, BusSegment, Junction, NetLabel, NoConnect,
-    PinEndpoint, PowerSymbol, Sym, TextItem, WireSegment,
+    display_pins_for_symbol, symbol_hit_half_extents, symbol_pin_world, BusSegment, Junction,
+    NetLabel, NoConnect, PinEndpoint, PowerSymbol, Sym, TextItem, WireSegment,
 };
 use crate::util;
 
 /// Pin hit radius in screen pixels.
-pub const PIN_HIT_RADIUS: f32 = 14.0;
+pub const PIN_HIT_RADIUS: f32 = 12.0;
 
 pub struct HoverState {
     pub symbol: Option<String>,
@@ -37,16 +37,19 @@ pub fn hover_at(
 
     for s in symbols {
         let center = viewport.world_to_screen(origin, s.pos);
-        let size = Vec2::new(140.0 * viewport.zoom, 62.0 * viewport.zoom);
+        let z = viewport.zoom;
+        let (hx, hy) = symbol_hit_half_extents(s);
+        let size = Vec2::new(hx * 2.0 * z, hy * 2.0 * z);
         let r = Rect::from_center_size(center, size);
         if !r.contains(pointer) {
             continue;
         }
-        symbol = Some(s.ref_des.clone());
         pin = pick_pin_on_symbol(pointer, origin, viewport, s, segments);
         if pin.is_some() {
+            symbol = Some(s.ref_des.clone());
             break;
         }
+        symbol = Some(s.ref_des.clone());
     }
 
     if pin.is_none() {

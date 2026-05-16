@@ -1,10 +1,21 @@
 //! Net name resolution and highlighting helpers.
 
 use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
 
 use crate::canvas::{NetLabel, WireSegment};
 
-/// All segment indices that share a net name (including via net labels).
+/// All segment indices on the same topological net (by `net_id`).
+pub fn segment_indices_for_net_id(net_id: Uuid, segments: &[WireSegment]) -> Vec<usize> {
+    segments
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.net_id == net_id)
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// All segment indices that share a display net name (legacy / label match).
 pub fn segment_indices_for_net(
     net: &str,
     segments: &[WireSegment],

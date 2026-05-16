@@ -6,11 +6,19 @@ pub mod document;
 mod geometry;
 mod hit_test;
 mod interaction;
+mod junctions;
+pub mod live_erc;
+mod net_sync;
+#[cfg(test)]
+mod netlist_golden;
 mod render;
 pub mod sheets;
 mod state;
 mod tools;
 mod viewport;
+mod wire_push;
+mod wire_reroute;
+mod wire_snap;
 
 pub use connectivity::wire_indices_for_net;
 
@@ -40,26 +48,28 @@ pub fn show(
     let tokens = UiTokens::default();
 
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
-    if resp.clicked() {
+    if resp.clicked() || resp.drag_started() {
         resp.request_focus();
     }
     let focused = resp.has_focus();
+    editor.canvas_has_focus = focused;
 
     editor.screen_rect = Some(rect);
     let origin = rect.min;
 
     editor.apply_zoom_fit_if_pending(rect, origin);
 
-    let scroll = ui.input(|i| i.raw_scroll_delta.y);
-    if scroll.abs() > 0.0
-        && (focused || rect.contains(ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center())))
-    {
+    // Zoom only while the pointer is over the schematic — not when scrolling side panels
+    // (canvas may still have keyboard focus after a click).
+    let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+    if scroll.abs() > 0.0 && resp.hovered() {
         let mouse = ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center());
         editor.viewport.zoom_at_pointer(origin, mouse, scroll);
     }
 
+    let space_pan = ui.input(|i| i.key_down(egui::Key::Space));
     let pan_primary = matches!(editor.tool, CanvasTool::Pan)
-        || (matches!(editor.tool, CanvasTool::Select) && editor.dragging_sym.is_none());
+        || (matches!(editor.tool, CanvasTool::Select) && space_pan);
 
     if resp.dragged_by(egui::PointerButton::Middle)
         || (resp.dragged_by(egui::PointerButton::Primary) && pan_primary)

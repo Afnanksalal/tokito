@@ -340,7 +340,7 @@ fn dual_row_ic(name: &str, pins: usize, desc: &str, ref_pre: &str) -> String {
             ));
         }
     }
-    body.push_str("\t)\n");
+    body.push_str("\t\t)\n\t)\n");
     body.push_str(FOOTER);
     body
 }

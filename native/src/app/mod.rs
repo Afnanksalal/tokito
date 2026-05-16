@@ -234,7 +234,7 @@ impl App {
     pub(crate) fn import_symbol_library_folder(&mut self) {
         let path = self.symbol_import_path.trim();
         if path.is_empty() {
-            self.set_err("Enter a folder path containing .tokito_sym files.");
+            self.set_err("Enter a folder path containing .tokito_sym or .kicad_sym files.");
             return;
         }
         match crate::symbol_library::import_folder(std::path::Path::new(path)) {
@@ -270,6 +270,7 @@ impl App {
         self.editor.active_sheet_id = sheet_id.clone();
         if let Some(doc) = self.studio_document.clone() {
             crate::editor::sheets::hydrate_active_sheet(&mut self.editor, &doc, &sheet_id);
+            self.enrich_symbols_from_library();
         }
         self.studio_dirty = true;
     }
@@ -296,6 +297,7 @@ impl App {
     fn apply_document_to_canvas(&mut self, doc: SchematicDocument) {
         self.studio_document = Some(doc.clone());
         document::load_document(&mut self.editor, doc);
+        self.enrich_symbols_from_library();
         self.studio_dirty = false;
     }
 
@@ -451,6 +453,8 @@ impl App {
                             footprint_ref: None,
                             symbol_id: None,
                             pin_layout: vec![],
+                            value: String::new(),
+                            fields: Default::default(),
                         })
                         .collect();
 
@@ -507,6 +511,7 @@ impl App {
                         }
                     }
                     self.editor.load_legacy_wires(wires);
+                    self.enrich_symbols_from_library();
                     self.editor.net_labels.clear();
                     self.editor.junctions.clear();
                     self.editor.no_connects.clear();
@@ -724,12 +729,17 @@ impl App {
                         prefix
                     };
                     let (symbol_id, pin_layout) =
-                        self.resolve_symbol_for_instance(part_id, &prefix);
+                        self.resolve_symbol_for_instance(part_id, &prefix, None);
                     let pins: Vec<String> = if pin_layout.is_empty() {
                         vec!["1".into(), "2".into()]
                     } else {
                         pin_layout.iter().map(|(n, _, _)| n.clone()).collect()
                     };
+                    let value = self.placement_value_for(
+                        symbol_id.as_deref(),
+                        &prefix,
+                        part_id.and_then(|id| self.part_cache.get(&id).map(String::as_str)),
+                    );
                     self.editor.symbols.push(Sym {
                         ref_des: ref_des.clone(),
                         part_id,
@@ -739,6 +749,8 @@ impl App {
                         footprint_ref: None,
                         symbol_id,
                         pin_layout,
+                        value,
+                        fields: Default::default(),
                     });
                     applied += 1;
                 }
@@ -766,14 +778,17 @@ impl App {
                     value,
                     ..
                 } => {
-                    if field.eq_ignore_ascii_case("footprint") {
-                        if let Some(sym) = self
-                            .editor
-                            .symbols
-                            .iter_mut()
-                            .find(|s| s.ref_des == ref_des)
-                        {
+                    if let Some(sym) = self
+                        .editor
+                        .symbols
+                        .iter_mut()
+                        .find(|s| s.ref_des == ref_des)
+                    {
+                        if field.eq_ignore_ascii_case("footprint") {
                             sym.footprint_ref = Some(value);
+                            applied += 1;
+                        } else if field.eq_ignore_ascii_case("value") {
+                            sym.value = value;
                             applied += 1;
                         }
                     }
@@ -791,22 +806,98 @@ impl App {
         &self,
         part_id: Option<Uuid>,
         prefix: &str,
+        meta_symbol_id: Option<&str>,
     ) -> (Option<String>, Vec<(String, f32, f32)>) {
         let Some(lib) = self.base_symbols.as_ref() else {
             return (None, vec![]);
         };
-        if let Some(id) = part_id {
-            if let Some(mpn) = self.part_cache.get(&id) {
-                let pre = guess_prefix(mpn);
-                if let Some((sym, pins)) = lib.default_for_prefix(pre) {
-                    return (Some(sym), pins);
-                }
+        let mpn = part_id.and_then(|id| self.part_cache.get(&id).map(String::as_str));
+        lib.resolve_for_placement(meta_symbol_id, mpn, prefix)
+    }
+
+    /// Attach library graphics and pin layouts to symbols missing metadata (e.g. after AI build).
+    fn enrich_symbols_from_library(&mut self) {
+        let Some(lib) = self.base_symbols.as_ref() else {
+            return;
+        };
+        for sym in &mut self.editor.symbols {
+            let prefix: String = sym
+                .ref_des
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            let prefix = if prefix.is_empty() {
+                "U".to_string()
+            } else {
+                prefix
+            };
+            let mpn = sym
+                .part_id
+                .and_then(|id| self.part_cache.get(&id).map(|s| s.as_str()));
+            let (symbol_id, pin_layout) =
+                lib.resolve_for_placement(sym.symbol_id.as_deref(), mpn, &prefix);
+            if sym.symbol_id.is_none() {
+                sym.symbol_id = symbol_id;
+            }
+            if sym.symbol_id.is_some() || sym.pin_layout.is_empty() {
+                sym.pin_layout = pin_layout.clone();
+            } else if sym
+                .pin_layout
+                .iter()
+                .map(|(_, x, y)| x.abs().max(y.abs()))
+                .fold(0.0_f32, f32::max)
+                < 20.0
+            {
+                sym.pin_layout = pin_layout.clone();
+            }
+            if sym.pins.is_empty() && !sym.pin_layout.is_empty() {
+                sym.pins = sym.pin_layout.iter().map(|(n, _, _)| n.clone()).collect();
             }
         }
-        if let Some((sym, pins)) = lib.default_for_prefix(prefix) {
-            return (Some(sym), pins);
+        let lib = self.base_symbols.as_ref();
+        for sym in &mut self.editor.symbols {
+            if sym.value.is_empty() {
+                let prefix: String = sym
+                    .ref_des
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphabetic())
+                    .collect();
+                let prefix = if prefix.is_empty() {
+                    "U".to_string()
+                } else {
+                    prefix
+                };
+                let mpn = sym
+                    .part_id
+                    .and_then(|id| self.part_cache.get(&id).map(|s| s.as_str()));
+                sym.value =
+                    placement_value_for_symbols(lib, sym.symbol_id.as_deref(), &prefix, mpn);
+            }
         }
-        (None, vec![])
+    }
+
+    fn placement_value_for(
+        &self,
+        symbol_id: Option<&str>,
+        prefix: &str,
+        part_mpn: Option<&str>,
+    ) -> String {
+        placement_value_for_symbols(self.base_symbols.as_ref(), symbol_id, prefix, part_mpn)
+    }
+
+    pub(crate) fn cut_selection(&mut self) {
+        if self.editor.copy_selection() {
+            self.editor.delete_selected();
+            self.studio_dirty = true;
+        }
+    }
+
+    pub(crate) fn paste_selection(&mut self) {
+        let n = self.editor.paste_clipboard();
+        if n > 0 {
+            self.studio_dirty = true;
+            self.log_console(format!("Pasted {n} item(s)."));
+        }
     }
 
     pub(crate) fn duplicate_selection(&mut self) {
@@ -862,11 +953,26 @@ impl App {
     }
 
     pub(crate) fn place_generic_symbol(&mut self, prefix: &str) {
+        let (symbol_id, pin_layout) = self
+            .base_symbols
+            .as_ref()
+            .and_then(|lib| lib.default_for_prefix(prefix))
+            .map(|(id, pins)| (Some(id), pins))
+            .unwrap_or((None, vec![]));
+        let default_value = symbol_id
+            .as_deref()
+            .and_then(|id| {
+                self.base_symbols
+                    .as_ref()
+                    .map(|lib| lib.default_value_for(id))
+            })
+            .unwrap_or_else(|| crate::component_value::default_value_for_library_id(prefix));
         self.editor.place_request = Some(PlaceSymbolRequest {
             prefix: prefix.to_string(),
             part_id: None,
-            symbol_id: None,
-            pin_layout: vec![],
+            symbol_id,
+            pin_layout,
+            default_value,
         });
         self.editor.tool = CanvasTool::PlaceSymbol;
     }
@@ -889,25 +995,54 @@ impl App {
         self.editor.symbols = draft
             .instances
             .iter()
-            .map(|i| Sym {
-                ref_des: i.ref_des.clone(),
-                part_id: i.part_id,
-                pos: snap_world_pos(Pos2::new(
-                    i.position.as_ref().map(|p| p.x).unwrap_or(120.0) as f32,
-                    i.position.as_ref().map(|p| p.y).unwrap_or(120.0) as f32,
-                )),
-                rotation_deg: i.rotation as f32,
-                pins: draft
-                    .pins
-                    .iter()
-                    .filter(|p| p.instance_ref == i.ref_des)
-                    .map(|p| p.pin_name.clone())
-                    .collect::<HashSet<_>>()
-                    .into_iter()
-                    .collect(),
-                footprint_ref: None,
-                symbol_id: None,
-                pin_layout: vec![],
+            .map(|i| {
+                let prefix: String = i
+                    .ref_des
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphabetic())
+                    .collect();
+                let prefix = if prefix.is_empty() {
+                    "U".to_string()
+                } else {
+                    prefix
+                };
+                let meta_sym = i.meta.as_ref().and_then(|m| {
+                    m.get("symbol_id")
+                        .and_then(|v| v.as_str())
+                        .map(String::from)
+                });
+                let meta_value = i
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.get("value").and_then(|v| v.as_str()).map(String::from));
+                let (symbol_id, pin_layout) =
+                    self.resolve_symbol_for_instance(i.part_id, &prefix, meta_sym.as_deref());
+                Sym {
+                    ref_des: i.ref_des.clone(),
+                    part_id: i.part_id,
+                    pos: snap_world_pos(Pos2::new(
+                        i.position.as_ref().map(|p| p.x).unwrap_or(120.0) as f32,
+                        i.position.as_ref().map(|p| p.y).unwrap_or(120.0) as f32,
+                    )),
+                    rotation_deg: i.rotation as f32,
+                    pins: if pin_layout.is_empty() {
+                        draft
+                            .pins
+                            .iter()
+                            .filter(|p| p.instance_ref == i.ref_des)
+                            .map(|p| p.pin_name.clone())
+                            .collect::<HashSet<_>>()
+                            .into_iter()
+                            .collect()
+                    } else {
+                        pin_layout.iter().map(|(n, _, _)| n.clone()).collect()
+                    },
+                    footprint_ref: None,
+                    symbol_id,
+                    pin_layout,
+                    value: meta_value.unwrap_or_default(),
+                    fields: Default::default(),
+                }
             })
             .collect();
         let mut by_net: HashMap<String, Vec<(String, String)>> = HashMap::new();
@@ -946,6 +1081,8 @@ impl App {
             }
         }
         self.editor.load_legacy_wires(wires);
+        self.enrich_symbols_from_library();
+        self.editor.sync_anchored_wire_endpoints();
         self.editor.net_labels.clear();
         self.editor.junctions.clear();
         self.editor.no_connects.clear();
@@ -1032,10 +1169,21 @@ impl App {
         }
     }
 
+    pub(crate) fn lcsc_catalog_enabled(&self) -> bool {
+        self.state.lcsc_anonymous_search
+    }
+
     pub(crate) fn search_catalog(&mut self) {
         let q = self.place_query.trim().to_string();
         if q.is_empty() {
             self.catalog_hits.clear();
+            return;
+        }
+        if !self.lcsc_catalog_enabled() && self.state.nexar.is_none() {
+            self.catalog_hits.clear();
+            self.log_console(
+                "Catalog search disabled — set TOKITO_LCSC_ANONYMOUS_SEARCH=true in .env and restart.",
+            );
             return;
         }
         let state = self.state.clone();
@@ -1058,14 +1206,15 @@ impl App {
                         product_url: h.product_url,
                     })
                     .collect();
+                let sources = match (self.lcsc_catalog_enabled(), self.state.nexar.is_some()) {
+                    (true, true) => "LCSC + Nexar",
+                    (true, false) => "LCSC",
+                    (false, true) => "Nexar",
+                    (false, false) => "none",
+                };
                 self.log_console(format!(
-                    "Catalog: {} hit(s) from LCSC{}",
-                    self.catalog_hits.len(),
-                    if self.state.nexar.is_some() {
-                        " + Nexar"
-                    } else {
-                        ""
-                    }
+                    "Catalog: {} hit(s) ({sources})",
+                    self.catalog_hits.len()
                 ));
             }
             Err(e) => self.set_err(e),
@@ -1074,9 +1223,55 @@ impl App {
 
     pub(crate) fn place_catalog_hit(&mut self, hit: &CatalogHit) {
         self.before_canvas_edit();
-        let prefix = guess_prefix(&hit.mpn);
+        let pool = self.pool.clone();
+        let hit_clone = CatalogHit {
+            mpn: hit.mpn.clone(),
+            manufacturer: hit.manufacturer.clone(),
+            description: hit.description.clone(),
+            package_name: hit.package_name.clone(),
+            footprint_hint: hit.footprint_hint.clone(),
+            datasheet_url: hit.datasheet_url.clone(),
+            distributor: hit.distributor.clone(),
+            sku: hit.sku.clone(),
+            product_url: hit.product_url.clone(),
+        };
+        let catalog_hit = tokito::models::CatalogPartHit {
+            mpn: hit_clone.mpn.clone(),
+            manufacturer: hit_clone.manufacturer.clone(),
+            description: hit_clone.description.clone(),
+            package_name: hit_clone.package_name.clone(),
+            footprint_hint: hit_clone.footprint_hint.clone(),
+            datasheet_url: hit_clone.datasheet_url.clone(),
+            distributor: hit_clone.distributor.clone(),
+            sku: hit_clone.sku.clone(),
+            product_url: hit_clone.product_url.clone(),
+            stock_qty: None,
+            unit_price_cents: None,
+            currency: None,
+        };
+        let part_id = match self.rt.block_on(async move {
+            tokito::services::catalog_part::ensure_part_from_catalog_hit(&pool, &catalog_hit).await
+        }) {
+            Ok(part) => {
+                self.part_cache.insert(part.id, part.mpn.clone());
+                self.bom_dirty = true;
+                Some(part.id)
+            }
+            Err(e) => {
+                self.log_console(format!("Catalog part not saved: {e}"));
+                None
+            }
+        };
+        let (symbol_id, pin_layout) = self
+            .base_symbols
+            .as_ref()
+            .map(|lib| lib.resolve_for_placement(None, Some(&hit.mpn), guess_prefix(&hit.mpn)))
+            .unwrap_or((None, vec![]));
+        let prefix = symbol_id
+            .as_deref()
+            .map(crate::base_symbols::BaseSymbolLibrary::refdes_prefix_for_library_id)
+            .unwrap_or_else(|| guess_prefix(&hit.mpn));
         let ref_des = next_refdes(&self.editor.symbols, prefix);
-        let (symbol_id, pin_layout) = self.resolve_symbol_for_instance(None, prefix);
         let pins: Vec<String> = if pin_layout.is_empty() {
             vec!["1".into(), "2".into()]
         } else {
@@ -1091,21 +1286,30 @@ impl App {
             .editor
             .screen_center_world()
             .unwrap_or_else(|| self.editor.snap_world(Pos2::new(240.0, 240.0)));
+        let value = self.placement_value_for(symbol_id.as_deref(), &prefix, Some(&hit.mpn));
         self.editor.symbols.push(Sym {
             ref_des: ref_des.clone(),
-            part_id: None,
+            part_id,
             pos,
             rotation_deg: 0.0,
             pins,
             footprint_ref,
             symbol_id,
             pin_layout,
+            value,
+            fields: Default::default(),
         });
         self.editor.tool = CanvasTool::Select;
         self.mcad_viewer.invalidate();
         self.log_console(format!(
-            "Placed {} ({}) — assign part in BOM or import to catalog",
-            ref_des, hit.distributor
+            "Placed {} ({}{})",
+            ref_des,
+            hit.distributor,
+            if part_id.is_some() {
+                " — part saved to library"
+            } else {
+                ""
+            }
         ));
     }
 
@@ -1118,7 +1322,7 @@ impl App {
             .editor
             .screen_center_world()
             .unwrap_or_else(|| self.editor.snap_world(Pos2::new(240.0, 240.0)));
-        let (symbol_id, pin_layout) = self.resolve_symbol_for_instance(Some(part.id), prefix);
+        let (symbol_id, pin_layout) = self.resolve_symbol_for_instance(Some(part.id), prefix, None);
         let pins: Vec<String> = if pin_layout.is_empty() {
             vec!["1".to_string(), "2".to_string()]
         } else {
@@ -1128,6 +1332,7 @@ impl App {
             .package_name
             .as_ref()
             .map(|p| tokito::services::footprint_map::hint_from_package(p));
+        let value = self.placement_value_for(symbol_id.as_deref(), prefix, Some(part.mpn.as_str()));
         self.editor.symbols.push(Sym {
             ref_des,
             part_id: Some(part.id),
@@ -1137,12 +1342,34 @@ impl App {
             footprint_ref,
             symbol_id,
             pin_layout,
+            value,
+            fields: Default::default(),
         });
         self.mcad_viewer.invalidate();
     }
 
     fn delete_selected(&mut self) {
         self.editor.delete_selected();
+    }
+}
+
+fn placement_value_for_symbols(
+    base_symbols: Option<&crate::base_symbols::BaseSymbolLibrary>,
+    symbol_id: Option<&str>,
+    prefix: &str,
+    part_mpn: Option<&str>,
+) -> String {
+    let from_lib = symbol_id.and_then(|id| base_symbols.map(|lib| lib.default_value_for(id)));
+    match prefix {
+        "R" | "C" | "L" | "D" => from_lib.unwrap_or_else(|| {
+            crate::component_value::default_value_for_library_id(symbol_id.unwrap_or("Device:R"))
+        }),
+        _ => part_mpn
+            .map(|s| s.to_string())
+            .or(from_lib)
+            .unwrap_or_else(|| {
+                crate::component_value::default_value_for_library_id(symbol_id.unwrap_or(""))
+            }),
     }
 }
 

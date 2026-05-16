@@ -10,7 +10,15 @@ use crate::canvas::{
     WireSegment, CANVAS_UNDO_CAP,
 };
 
+use super::geometry::paste_nudge;
 use super::tools::CanvasTool;
+
+/// In-memory clipboard for canvas copy/cut/paste.
+#[derive(Clone, Default)]
+pub struct CanvasClipboard {
+    pub symbols: Vec<Sym>,
+    pub wire_segments: Vec<WireSegment>,
+}
 
 /// Pending symbol placement from library / parts catalog.
 #[derive(Clone)]
@@ -19,6 +27,7 @@ pub struct PlaceSymbolRequest {
     pub part_id: Option<Uuid>,
     pub symbol_id: Option<String>,
     pub pin_layout: Vec<(String, f32, f32)>,
+    pub default_value: String,
 }
 
 pub struct SchematicEditor {
@@ -32,12 +41,13 @@ pub struct SchematicEditor {
     pub text_items: Vec<TextItem>,
     pub buses: Vec<BusSegment>,
 
-    /// Multi-sheet support (Milestone 6).
     pub sheets: Vec<SheetInfo>,
     pub active_sheet_id: String,
 
     /// ERC markers rendered on canvas (from last save / run).
     pub erc_markers: Vec<ErcMarkerOnCanvas>,
+    /// Last connectivity rebuild: pin → net id (for live ERC).
+    pub connectivity_pin_net: HashMap<(String, String), Uuid>,
 
     pub selected_syms: HashSet<String>,
     pub selected_segments: HashSet<usize>,
@@ -57,6 +67,8 @@ pub struct SchematicEditor {
     pub dragging_segment_endpoint: Option<(usize, bool)>,
     pub wire_drag_from: Option<PinEndpoint>,
     pub wire_chain_last: Option<Pos2>,
+    /// `wire_segments.len()` when the current wire chain started (in-progress clicks).
+    pub wire_chain_segment_start: Option<usize>,
 
     pub box_select_start: Option<Pos2>,
     pub box_select_current: Option<Pos2>,
@@ -73,6 +85,10 @@ pub struct SchematicEditor {
     pub erc_marker_index: Option<usize>,
     pub place_request: Option<PlaceSymbolRequest>,
     pub selection_filter: SelectionFilter,
+
+    /// Set each frame when the schematic canvas panel has keyboard focus.
+    pub canvas_has_focus: bool,
+    pub clipboard: Option<CanvasClipboard>,
 
     undo: Vec<CanvasSnapshot>,
     redo: Vec<CanvasSnapshot>,
@@ -163,6 +179,7 @@ impl Default for SchematicEditor {
             }],
             active_sheet_id: tokito::models::DEFAULT_SHEET_ID.to_string(),
             erc_markers: vec![],
+            connectivity_pin_net: HashMap::new(),
             selected_syms: HashSet::new(),
             selected_segments: HashSet::new(),
             selected_net_label: None,
@@ -178,6 +195,7 @@ impl Default for SchematicEditor {
             dragging_segment_endpoint: None,
             wire_drag_from: None,
             wire_chain_last: None,
+            wire_chain_segment_start: None,
             box_select_start: None,
             box_select_current: None,
             tool: CanvasTool::default(),
@@ -192,6 +210,8 @@ impl Default for SchematicEditor {
             erc_marker_index: None,
             place_request: None,
             selection_filter: SelectionFilter::default(),
+            canvas_has_focus: false,
+            clipboard: None,
             undo: vec![],
             redo: vec![],
         }
@@ -269,6 +289,142 @@ impl SchematicEditor {
         self.selected_erc_marker = None;
     }
 
+    /// Marquee / Ctrl+A: select all schematic items on the active sheet.
+    pub fn select_all(&mut self) {
+        self.clear_selection();
+        if self.selection_filter.allows_symbols() {
+            for sym in &self.symbols {
+                self.selected_syms.insert(sym.ref_des.clone());
+            }
+            self.selected_sym = self.symbols.first().map(|s| s.ref_des.clone());
+        }
+        if self.selection_filter.allows_wires() {
+            for i in 0..self.wire_segments.len() {
+                self.selected_segments.insert(i);
+            }
+            self.selected_segment = self.selected_segments.iter().copied().next();
+        }
+        if self.selection_filter.allows_labels() {
+            if !self.net_labels.is_empty() {
+                self.selected_net_label = Some(0);
+            }
+            if !self.power_symbols.is_empty() {
+                self.selected_power_symbol = Some(0);
+            }
+        }
+        if self.selection_filter.allows_annotations() {
+            if !self.junctions.is_empty() {
+                self.selected_junction = Some(0);
+            }
+            if !self.no_connects.is_empty() {
+                self.selected_no_connect = Some(0);
+            }
+            if !self.text_items.is_empty() {
+                self.selected_text_item = Some(0);
+            }
+        }
+        if self.selection_filter.allows_wires() && !self.buses.is_empty() {
+            self.selected_bus = Some(0);
+        }
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selection_count() > 0
+    }
+
+    pub fn copy_selection(&mut self) -> bool {
+        let symbols: Vec<Sym> = self
+            .symbols
+            .iter()
+            .filter(|s| self.selected_syms.contains(&s.ref_des))
+            .cloned()
+            .collect();
+        let wire_segments: Vec<WireSegment> = self
+            .wire_segments
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.selected_segments.contains(i))
+            .map(|(_, s)| s.clone())
+            .collect();
+        if symbols.is_empty() && wire_segments.is_empty() {
+            return false;
+        }
+        self.clipboard = Some(CanvasClipboard {
+            symbols,
+            wire_segments,
+        });
+        true
+    }
+
+    pub fn paste_clipboard(&mut self) -> usize {
+        let Some(cb) = self.clipboard.clone() else {
+            return 0;
+        };
+        if cb.symbols.is_empty() && cb.wire_segments.is_empty() {
+            return 0;
+        }
+        self.before_edit();
+        let nudge = paste_nudge();
+        let mut ref_map: HashMap<String, String> = HashMap::new();
+        let mut pasted = 0usize;
+
+        for sym in cb.symbols {
+            let prefix: String = sym
+                .ref_des
+                .chars()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            let prefix = if prefix.is_empty() {
+                "U".to_string()
+            } else {
+                prefix
+            };
+            let new_ref = crate::util::next_refdes(&self.symbols, &prefix);
+            ref_map.insert(sym.ref_des.clone(), new_ref.clone());
+            let mut dup = sym;
+            dup.ref_des = new_ref.clone();
+            dup.pos = snap_world_pos(dup.pos + nudge);
+            self.selected_syms.insert(new_ref.clone());
+            self.symbols.push(dup);
+            pasted += 1;
+        }
+        self.selected_sym = self
+            .symbols
+            .iter()
+            .find(|s| self.selected_syms.contains(&s.ref_des))
+            .map(|s| s.ref_des.clone());
+
+        for mut seg in cb.wire_segments {
+            seg.id = Uuid::new_v4();
+            if let Some(ep) = seg.start_pin.as_mut() {
+                if let Some(nr) = ref_map.get(&ep.ref_des) {
+                    ep.ref_des = nr.clone();
+                } else {
+                    seg.start_pin = None;
+                }
+            }
+            if let Some(ep) = seg.end_pin.as_mut() {
+                if let Some(nr) = ref_map.get(&ep.ref_des) {
+                    ep.ref_des = nr.clone();
+                } else {
+                    seg.end_pin = None;
+                }
+            }
+            if seg.start_pin.is_none() {
+                seg.start += nudge;
+            }
+            if seg.end_pin.is_none() {
+                seg.end += nudge;
+            }
+            let idx = self.wire_segments.len();
+            self.wire_segments.push(seg);
+            self.selected_segments.insert(idx);
+            pasted += 1;
+        }
+        self.refresh_wire_connectivity();
+        pasted
+    }
+
     pub fn selection_count(&self) -> usize {
         self.selected_syms.len()
             + self.selected_segments.len()
@@ -317,22 +473,22 @@ impl SchematicEditor {
         Some(crate::canvas::symbol_pin_world(sym, &endpoint.pin_name))
     }
 
-    /// Select every wire segment (and label) on the same net name as `segment_index`.
+    /// Select every wire segment (and label) on the same electrical net as `segment_index`.
     pub fn select_net_for_segment(&mut self, segment_index: usize) {
-        let Some(net) = self.wire_segments.get(segment_index).map(|s| s.net.clone()) else {
+        let Some(seg) = self.wire_segments.get(segment_index) else {
             return;
         };
+        let net_id = seg.net_id;
+        let net_name = seg.net.clone();
         self.clear_selection();
-        for i in crate::editor::connectivity::segment_indices_for_net(
-            &net,
-            &self.wire_segments,
-            &self.net_labels,
-        ) {
+        for i in
+            crate::editor::connectivity::segment_indices_for_net_id(net_id, &self.wire_segments)
+        {
             self.selected_segments.insert(i);
         }
         self.selected_segment = Some(segment_index);
         for (i, label) in self.net_labels.iter().enumerate() {
-            if label.name.trim() == net.trim() {
+            if label.name.trim() == net_name.trim() {
                 self.selected_net_label = Some(i);
             }
         }
@@ -347,19 +503,195 @@ impl SchematicEditor {
             })
     }
 
+    pub fn inherited_wire_net(&self) -> String {
+        if let Some(from) = &self.wire_drag_from {
+            for seg in &self.wire_segments {
+                if seg.start_pin.as_ref() == Some(from) || seg.end_pin.as_ref() == Some(from) {
+                    return seg.net.clone();
+                }
+            }
+        }
+        if let Some(start) = self.wire_chain_segment_start {
+            for seg in self.wire_segments[start..].iter() {
+                if !seg.net.is_empty() {
+                    return seg.net.clone();
+                }
+            }
+        }
+        let n = self.new_wire_net.trim();
+        if n.is_empty() {
+            "NET".to_string()
+        } else {
+            n.to_string()
+        }
+    }
+
+    fn net_id_for_wire_route(&self, a: &PinEndpoint, b: &PinEndpoint) -> uuid::Uuid {
+        self.wire_segments
+            .iter()
+            .find(|s| {
+                s.start_pin.as_ref().is_some_and(|p| p == a)
+                    || s.end_pin.as_ref().is_some_and(|p| p == a)
+                    || s.start_pin.as_ref().is_some_and(|p| p == b)
+                    || s.end_pin.as_ref().is_some_and(|p| p == b)
+            })
+            .map(|s| s.net_id)
+            .unwrap_or_else(uuid::Uuid::new_v4)
+    }
+
     pub fn push_wire_between(&mut self, a: PinEndpoint, b: PinEndpoint, net: String) {
         let (Some(pa), Some(pb)) = (self.endpoint_world(&a), self.endpoint_world(&b)) else {
             return;
         };
-        self.push_segments_between(pa, pb, net);
+        let net_id = self.net_id_for_wire_route(&a, &b);
+        self.remove_segments_between_pins(&a, &b, net_id);
+        let mut segs = manhattan_segments(pa, pb, net.clone());
+        for seg in &mut segs {
+            seg.net_id = net_id;
+            seg.net = net.clone();
+        }
+        if let Some(first) = segs.first_mut() {
+            first.start_pin = Some(a.clone());
+        }
+        if let Some(last) = segs.last_mut() {
+            last.end_pin = Some(b.clone());
+        }
+        self.push_wire_segments(segs);
+    }
+
+    /// Drop in-progress chain clicks and connect two pins with a clean Manhattan route.
+    pub fn commit_wire_to_pin(&mut self, from: PinEndpoint, to: PinEndpoint, net: String) {
+        self.discard_wire_chain();
+        self.wire_chain_last = self.endpoint_world(&to);
+        let continue_from = to.clone();
+        self.push_wire_between(from, to, net);
+        self.wire_drag_from = Some(continue_from);
+        self.wire_chain_segment_start = Some(self.wire_segments.len());
+    }
+
+    pub fn start_wire_from_pin(&mut self, pin: PinEndpoint) {
+        self.wire_drag_from = Some(pin.clone());
+        self.wire_chain_last = self.endpoint_world(&pin);
+        self.wire_chain_segment_start = Some(self.wire_segments.len());
+    }
+
+    pub fn discard_wire_chain(&mut self) {
+        if let Some(start) = self.wire_chain_segment_start {
+            if start < self.wire_segments.len() {
+                self.wire_segments.truncate(start);
+            }
+        }
+        self.wire_chain_segment_start = None;
+        self.wire_chain_last = None;
+    }
+
+    pub fn cancel_wire_tool(&mut self) {
+        self.discard_wire_chain();
+        self.wire_drag_from = None;
     }
 
     pub fn push_segments_between(&mut self, start: Pos2, end: Pos2, net: String) {
-        for seg in manhattan_segments(start, end, net.clone()) {
+        let net_id = self
+            .wire_segments
+            .last()
+            .map(|s| s.net_id)
+            .unwrap_or_else(uuid::Uuid::new_v4);
+        let mut segs = manhattan_segments(start, end, net.clone());
+        for seg in &mut segs {
+            seg.net_id = net_id;
+            seg.net = net.clone();
+        }
+        self.push_wire_segments(segs);
+    }
+
+    fn push_wire_segments(&mut self, segs: Vec<WireSegment>) {
+        for seg in segs {
             self.maybe_add_junction(seg.start);
             self.maybe_add_junction(seg.end);
             self.wire_segments.push(seg);
         }
+        self.sanitize_wires();
+    }
+
+    fn sanitize_wires(&mut self) {
+        self.wire_segments = crate::canvas::orthogonalize_segments(&self.wire_segments);
+    }
+
+    fn remove_segments_between_pins(&mut self, a: &PinEndpoint, b: &PinEndpoint, net_id: Uuid) {
+        self.wire_segments.retain(|seg| {
+            if seg.net_id != net_id {
+                return true;
+            }
+            let has_a = seg.start_pin.as_ref().is_some_and(|p| p == a)
+                || seg.end_pin.as_ref().is_some_and(|p| p == a);
+            let has_b = seg.start_pin.as_ref().is_some_and(|p| p == b)
+                || seg.end_pin.as_ref().is_some_and(|p| p == b);
+            !(has_a && has_b)
+        });
+    }
+
+    /// Recompute world positions for wire endpoints attached to symbol pins.
+    pub fn sync_anchored_wire_endpoints(&mut self) {
+        crate::canvas::sync_anchored_wire_endpoints(&mut self.wire_segments, &self.symbols);
+    }
+
+    pub fn reroute_anchored_wires(&mut self) {
+        super::wire_reroute::reroute_pin_connected_chains(&mut self.wire_segments, &self.symbols);
+    }
+
+    pub fn refresh_wire_connectivity(&mut self) {
+        self.connectivity_pin_net = super::net_sync::refresh_connectivity(
+            &self.symbols,
+            &mut self.wire_segments,
+            &mut self.junctions,
+            &self.net_labels,
+            &self.power_symbols,
+            &self.no_connects,
+            &self.buses,
+        );
+        super::live_erc::refresh_live_erc_markers(self);
+    }
+
+    /// After dragging a wire endpoint: snap to pin, orthogonalize, rebuild nets.
+    pub fn finish_segment_endpoint_drag(&mut self, seg_idx: usize, is_end: bool) {
+        if let Some(seg) = self.wire_segments.get_mut(seg_idx) {
+            let world = if is_end { seg.end } else { seg.start };
+            if let Some((pw, ep)) =
+                super::live_erc::snap_segment_endpoint_to_pin(world, &self.symbols)
+            {
+                if is_end {
+                    seg.end = pw;
+                    seg.end_pin = Some(ep);
+                } else {
+                    seg.start = pw;
+                    seg.start_pin = Some(ep);
+                }
+            }
+        }
+        super::net_sync::attach_orphan_endpoints_to_pins(&self.symbols, &mut self.wire_segments);
+        self.wire_segments = crate::canvas::orthogonalize_segments(&self.wire_segments);
+        self.refresh_wire_connectivity();
+    }
+
+    pub fn sync_wires_after_symbol_move(&mut self) {
+        self.sync_anchored_wire_endpoints();
+        self.sanitize_wires();
+        self.reroute_anchored_wires();
+        self.sanitize_wires();
+    }
+
+    /// Move wire ends and junctions attached to dragged symbols.
+    pub fn push_wires_for_moved_symbols(
+        &mut self,
+        moved_refs: &std::collections::HashSet<String>,
+        delta: egui::Vec2,
+    ) {
+        super::wire_push::push_wires_for_symbol_delta(
+            &mut self.wire_segments,
+            &mut self.junctions,
+            moved_refs,
+            delta,
+        );
     }
 
     pub fn maybe_add_junction(&mut self, pos: Pos2) {
@@ -473,6 +805,8 @@ impl SchematicEditor {
                 sym.rotation_deg = (sym.rotation_deg + delta_deg).rem_euclid(360.0);
             }
         }
+        self.sync_wires_after_symbol_move();
+        self.refresh_wire_connectivity();
     }
 
     pub fn mirror_selected_symbols_x(&mut self) {
@@ -485,6 +819,8 @@ impl SchematicEditor {
                 sym.rotation_deg = (360.0 - sym.rotation_deg).rem_euclid(360.0);
             }
         }
+        self.sync_wires_after_symbol_move();
+        self.refresh_wire_connectivity();
     }
 
     /// Clone selected symbols with new refdes, offset by `delta_world` (grid units).

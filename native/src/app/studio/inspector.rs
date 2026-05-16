@@ -91,9 +91,18 @@ impl App {
         } else if let Some(r) = self.editor.selected_sym.clone() {
             if let Some(idx) = self.editor.symbols.iter().position(|s| s.ref_des == r) {
                 let rd = self.editor.symbols[idx].ref_des.clone();
+                let prefix: String = rd.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+                let value_hint = crate::component_value::value_placeholder_for_prefix(&prefix);
+                let mut value = self.editor.symbols[idx].value.clone();
                 chrome.subsection(ui, "Symbol");
                 crate::ui::layout::content_card(ui, chrome.tokens, |ui| {
                     crate::ui::layout::inspector_row(ui, chrome.tokens, "RefDes", rd.clone());
+                    ui.label(egui::RichText::new("Value").small().weak());
+                    ui.add(
+                        egui::TextEdit::singleline(&mut value)
+                            .hint_text(value_hint)
+                            .desired_width(ui.available_width()),
+                    );
                     let pid = self.editor.symbols[idx]
                         .part_id
                         .and_then(|id| self.part_cache.get(&id).cloned())
@@ -119,6 +128,10 @@ impl App {
                         .join(", "),
                     );
                 });
+                if value != self.editor.symbols[idx].value {
+                    self.before_canvas_edit();
+                    self.editor.symbols[idx].value = value;
+                }
                 ui.add_space(6.0);
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);

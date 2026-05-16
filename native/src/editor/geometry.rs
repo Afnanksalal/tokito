@@ -1,14 +1,12 @@
 //! World-space bounds and routing helpers for the schematic canvas.
 
-use egui::{Pos2, Rect};
+use egui::{Pos2, Rect, Vec2};
 
-use crate::canvas::CanvasSnapshot;
+use crate::canvas::{symbol_hit_half_extents, GRID_PX};
+use crate::canvas::{CanvasSnapshot, Sym, WireSegment};
 
 /// Padding around content when fitting the viewport (world units).
 pub const FIT_PADDING: f32 = 48.0;
-
-/// Minimum world extent when the sheet is empty (fit still centers a usable view).
-pub const EMPTY_SHEET_HALF: f32 = 200.0;
 
 /// Union bounding box of all schematic geometry on the canvas.
 pub fn content_bounds(snap: &CanvasSnapshot) -> Option<Rect> {
@@ -69,8 +67,65 @@ pub fn content_bounds(snap: &CanvasSnapshot) -> Option<Rect> {
 
 /// Default bounds when opening an empty sheet (centered at origin).
 pub fn empty_sheet_bounds() -> Rect {
-    Rect::from_center_size(
-        Pos2::ZERO,
-        egui::vec2(EMPTY_SHEET_HALF * 2.0, EMPTY_SHEET_HALF * 2.0),
-    )
+    crate::canvas::sheet_bounds_world()
+}
+
+/// Axis-aligned bounds of a symbol in world space (for hit testing / marquee).
+pub fn symbol_bounds_world(sym: &Sym) -> Rect {
+    let (hx, hy) = symbol_hit_half_extents(sym);
+    Rect::from_center_size(sym.pos, Vec2::new(hx * 2.0, hy * 2.0))
+}
+
+/// Whether a symbol is inside a marquee (enclosed = full bounds inside, else intersects).
+pub fn symbol_in_marquee(sym: &Sym, marquee: Rect, enclosed: bool) -> bool {
+    let b = symbol_bounds_world(sym);
+    if enclosed {
+        marquee.contains(b.min) && marquee.contains(b.max)
+    } else {
+        marquee.intersects(b)
+    }
+}
+
+/// Whether a wire segment is inside / touched by a marquee.
+pub fn segment_in_marquee(seg: &WireSegment, marquee: Rect, enclosed: bool) -> bool {
+    if enclosed {
+        return marquee.contains(seg.start) && marquee.contains(seg.end);
+    }
+    marquee.contains(seg.start)
+        || marquee.contains(seg.end)
+        || segment_intersects_rect(seg.start, seg.end, marquee)
+}
+
+fn segment_intersects_rect(a: Pos2, b: Pos2, r: Rect) -> bool {
+    if r.contains(a) || r.contains(b) {
+        return true;
+    }
+    let edges = [
+        (r.left_top(), r.right_top()),
+        (r.right_top(), r.right_bottom()),
+        (r.right_bottom(), r.left_bottom()),
+        (r.left_bottom(), r.left_top()),
+    ];
+    edges.iter().any(|&(p, q)| segments_intersect(a, b, p, q))
+}
+
+fn segments_intersect(a: Pos2, b: Pos2, c: Pos2, d: Pos2) -> bool {
+    fn cross(o: Pos2, a: Pos2, b: Pos2) -> f32 {
+        (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x)
+    }
+    let d1 = cross(c, d, a);
+    let d2 = cross(c, d, b);
+    let d3 = cross(a, b, c);
+    let d4 = cross(a, b, d);
+    if ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
+        && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
+    {
+        return true;
+    }
+    false
+}
+
+/// Default paste nudge (one grid step).
+pub fn paste_nudge() -> Vec2 {
+    Vec2::new(GRID_PX * 2.0, GRID_PX * 2.0)
 }

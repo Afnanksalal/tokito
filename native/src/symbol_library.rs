@@ -1,4 +1,4 @@
-//! User symbol library paths and import pipeline (`.tokito_sym` folders).
+//! User symbol library paths and import pipeline (`.tokito_sym` / `.kicad_sym` folders).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,7 +15,8 @@ pub fn user_symbols_root() -> PathBuf {
         .join("symbols")
 }
 
-/// Copy all `.tokito_sym` files from `src` into the user library, preserving subfolders.
+/// Copy symbol library files from `src` into the user library, preserving subfolders.
+/// `.kicad_sym` files are validated and stored as `.tokito_sym` (equivalent s-expression).
 pub fn import_folder(src: &Path) -> anyhow::Result<usize> {
     let dst_root = user_symbols_root();
     fs::create_dir_all(&dst_root)?;
@@ -26,19 +27,30 @@ pub fn import_folder(src: &Path) -> anyhow::Result<usize> {
         .filter(|e| e.file_type().is_file())
     {
         let path = entry.path();
-        if !path
-            .to_str()
-            .is_some_and(|p| p.ends_with(&format!(".{}", SymbolLibFile::EXTENSION)))
-        {
+        if !SymbolLibFile::is_library_path(path) {
             continue;
         }
-        SymbolLibFile::read(path).context(format!("parse {}", path.display()))?;
+        let text = fs::read_to_string(path).context(format!("read {}", path.display()))?;
+        SymbolLibFile::parse(&text).context(format!("parse {}", path.display()))?;
         let rel = path.strip_prefix(src).unwrap_or(path).to_path_buf();
-        let out = dst_root.join(rel);
-        if let Some(parent) = out.parent() {
-            fs::create_dir_all(parent)?;
+        let mut out = dst_root.join(rel);
+        if path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e == SymbolLibFile::IMPORT_SYM_EXT)
+        {
+            out.set_extension(SymbolLibFile::EXTENSION);
+            let normalized = SymbolLibFile::normalize_to_tokito_format(&text);
+            if let Some(parent) = out.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&out, normalized)?;
+        } else {
+            if let Some(parent) = out.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(path, &out)?;
         }
-        fs::copy(path, &out)?;
         count += 1;
     }
     Ok(count)

@@ -136,6 +136,9 @@ mod tests {
             start: DocumentPoint { x: 0.0, y: 0.0 },
             end: DocumentPoint { x: 100.0, y: 0.0 },
             net_name: Some("NET".into()),
+            net_id: None,
+            start_pin: None,
+            end_pin: None,
         });
         let pdf = document_to_pdf(&doc);
         assert!(pdf.starts_with(b"%PDF"));

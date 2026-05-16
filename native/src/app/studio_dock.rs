@@ -62,11 +62,7 @@ pub fn default_studio_dock() -> DockState<StudioTab> {
     let [canvas, _bottom] = dock.main_surface_mut().split_below(
         root,
         0.78,
-        vec![
-            StudioTab::Messages,
-            StudioTab::Research,
-            StudioTab::Console,
-        ],
+        vec![StudioTab::Messages, StudioTab::Research, StudioTab::Console],
     );
     let [_canvas, _right] = dock.main_surface_mut().split_right(
         canvas,
@@ -86,6 +82,9 @@ pub fn ensure_tab_visible(dock: &mut DockState<StudioTab>, tab: StudioTab) {
     if let Some((surface, node, tab_idx)) = dock.find_tab(&tab) {
         dock.set_active_tab((surface, node, tab_idx));
         dock.set_focused_node_and_surface((surface, node));
+    } else if dock.main_surface().num_tabs() == 0 {
+        *dock = default_studio_dock();
+        ensure_tab_visible(dock, tab);
     } else {
         dock.push_to_focused_leaf(tab);
     }
@@ -137,11 +136,7 @@ impl TabViewer for AppDockViewer {
     }
 
     fn add_popup(&mut self, ui: &mut Ui, surface: SurfaceIndex, node: NodeIndex) {
-        ui.label(
-            RichText::new("Add panel to this tab group")
-                .small()
-                .weak(),
-        );
+        ui.label(RichText::new("Add panel to this tab group").small().weak());
         ui.separator();
         let app = unsafe { &mut *self.app };
         egui::ScrollArea::vertical()

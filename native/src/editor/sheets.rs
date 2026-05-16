@@ -10,9 +10,9 @@ use crate::canvas::{
 use crate::editor::{ErcMarkerOnCanvas, SchematicEditor, SheetInfo};
 use tokito::models::{
     DocumentBusSegment, DocumentErcMarker, DocumentJunction, DocumentNetLabel, DocumentNoConnect,
-    DocumentPin, DocumentPoint, DocumentPowerSymbol, DocumentSymbol, DocumentTextItem,
-    DocumentWireSegment, ElectricalPinType, MirrorMode, PinOrientation, SchematicDocument,
-    SchematicSheet,
+    DocumentPin, DocumentPinAnchor, DocumentPoint, DocumentPowerSymbol, DocumentSymbol,
+    DocumentTextItem, DocumentWireSegment, ElectricalPinType, MirrorMode, PinOrientation,
+    SchematicDocument, SchematicSheet,
 };
 
 /// Write the active sheet from `editor` into `doc`, replacing prior geometry for that sheet id.
@@ -68,6 +68,15 @@ pub fn flush_active_sheet(
                 y: seg.end.y as f64,
             },
             net_name: Some(seg.net.clone()),
+            net_id: Some(seg.net_id),
+            start_pin: seg.start_pin.as_ref().map(|p| DocumentPinAnchor {
+                ref_des: p.ref_des.clone(),
+                pin_name: p.pin_name.clone(),
+            }),
+            end_pin: seg.end_pin.as_ref().map(|p| DocumentPinAnchor {
+                ref_des: p.ref_des.clone(),
+                pin_name: p.pin_name.clone(),
+            }),
         }));
     doc.net_labels
         .extend(editor.net_labels.iter().map(|l| DocumentNetLabel {
@@ -180,7 +189,16 @@ pub fn hydrate_active_sheet(editor: &mut SchematicEditor, doc: &SchematicDocumen
             id: w.id,
             start: Pos2::new(w.start.x as f32, w.start.y as f32),
             end: Pos2::new(w.end.x as f32, w.end.y as f32),
+            net_id: w.net_id.unwrap_or_else(uuid::Uuid::new_v4),
             net: w.net_name.clone().unwrap_or_else(|| "NET".to_string()),
+            start_pin: w.start_pin.as_ref().map(|p| crate::canvas::PinEndpoint {
+                ref_des: p.ref_des.clone(),
+                pin_name: p.pin_name.clone(),
+            }),
+            end_pin: w.end_pin.as_ref().map(|p| crate::canvas::PinEndpoint {
+                ref_des: p.ref_des.clone(),
+                pin_name: p.pin_name.clone(),
+            }),
         })
         .collect();
     editor.net_labels = doc
@@ -250,6 +268,8 @@ pub fn hydrate_active_sheet(editor: &mut SchematicEditor, doc: &SchematicDocumen
             net_name: None,
         })
         .collect();
+    editor.sync_anchored_wire_endpoints();
+    editor.refresh_wire_connectivity();
     editor.clear_selection();
     editor.clear_history();
 }
@@ -277,6 +297,16 @@ fn document_symbol_to_sym(s: &DocumentSymbol) -> Sym {
             (name, p.offset.x as f32, p.offset.y as f32)
         })
         .collect();
+    let value = s
+        .value
+        .clone()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| {
+            s.symbol_id
+                .as_deref()
+                .map(crate::component_value::default_value_for_library_id)
+                .unwrap_or_default()
+        });
     Sym {
         ref_des: s.ref_des.clone(),
         part_id: s.part_id,
@@ -286,13 +316,15 @@ fn document_symbol_to_sym(s: &DocumentSymbol) -> Sym {
         footprint_ref: s.footprint_ref.clone(),
         symbol_id: s.symbol_id.clone(),
         pin_layout,
+        value,
+        fields: s.fields.clone(),
     }
 }
 
 fn symbol_to_document(
     s: &Sym,
     sheet_id: &str,
-    part_cache: &std::collections::HashMap<Uuid, String>,
+    _part_cache: &std::collections::HashMap<Uuid, String>,
 ) -> DocumentSymbol {
     let pins: Vec<DocumentPin> = if s.pin_layout.is_empty() {
         s.pins
@@ -325,14 +357,14 @@ fn symbol_to_document(
             .clone()
             .or_else(|| Some("tokito:generic".to_string())),
         ref_des: s.ref_des.clone(),
-        value: s.part_id.and_then(|id| part_cache.get(&id)).cloned(),
+        value: Some(s.value.clone()).filter(|v| !v.is_empty()),
         position: DocumentPoint {
             x: s.pos.x as f64,
             y: s.pos.y as f64,
         },
         rotation: s.rotation_deg as f64,
         mirror: MirrorMode::None,
-        fields: Default::default(),
+        fields: s.fields.clone(),
         footprint_ref: s.footprint_ref.clone(),
         pins,
     }
@@ -348,7 +380,11 @@ fn default_document_pin(pin_name: &str) -> DocumentPin {
         name: pin_name.to_string(),
         electrical_type: ElectricalPinType::Unspecified,
         offset: DocumentPoint {
-            x: if right_side { 70.0 } else { -70.0 },
+            x: if right_side {
+                f64::from(crate::canvas::pin_pitch_world())
+            } else {
+                f64::from(-crate::canvas::pin_pitch_world())
+            },
             y: 0.0,
         },
         orientation: if right_side {

@@ -9,6 +9,17 @@ impl App {
     pub(crate) fn ui_studio(&mut self, ctx: &egui::Context, design_id: Uuid) {
         let tokens = crate::ui::tokens::UiTokens::default();
 
+        // Keep the central dock wide enough; egui_dock panics on zero-width nodes.
+        const CENTER_MIN: f32 = 360.0;
+        const TOOLBAR_W: f32 = 52.0;
+        let screen_w = ctx.screen_rect().width();
+        let sides_budget = (screen_w - TOOLBAR_W - CENTER_MIN).max(0.0);
+        let side_w = if self.canvas_focus_mode {
+            0.0
+        } else {
+            (sides_budget / 2.0).clamp(220.0, 340.0)
+        };
+
         // CAD tool rail (leftmost)
         egui::SidePanel::left("cad_toolbar")
             .resizable(false)
@@ -18,11 +29,11 @@ impl App {
                 self.render_cad_toolbar(ui, &tokens);
             });
 
-        if !self.canvas_focus_mode {
+        if !self.canvas_focus_mode && side_w > 0.0 {
             egui::SidePanel::left("place_panel")
                 .resizable(true)
-                .default_width(300.0)
-                .width_range(260.0..=420.0)
+                .default_width(side_w)
+                .width_range(200.0..=side_w.max(220.0))
                 .frame(panel_frame(&tokens))
                 .show(ctx, |ui| {
                     self.render_studio_place_panel(ui);
@@ -30,8 +41,8 @@ impl App {
 
             egui::SidePanel::right("properties_panel")
                 .resizable(true)
-                .default_width(300.0)
-                .width_range(260.0..=400.0)
+                .default_width(side_w)
+                .width_range(200.0..=side_w.max(220.0))
                 .frame(panel_frame(&tokens))
                 .show(ctx, |ui| {
                     self.render_studio_inspector_tab(ui);
@@ -59,6 +70,13 @@ impl App {
                         .small()
                         .color(tokens.text_secondary),
                     );
+                    if matches!(self.editor.tool, CanvasTool::Select) {
+                        ui.label(
+                            egui::RichText::new("Drag marquee · Space+drag pan · MMB pan")
+                                .small()
+                                .color(tokens.text_muted),
+                        );
+                    }
                     ui.separator();
                     let sel = if self.editor.wire_drag_from.is_some() {
                         "wiring".to_string()
@@ -128,6 +146,19 @@ impl App {
                 style.tab_bar.height = 26.0;
                 style.tab.tab_body.inner_margin = egui::Margin::symmetric(10.0, 4.0);
 
+                let avail = ui.available_size();
+                if avail.x < 80.0 || avail.y < 48.0 {
+                    ui.centered_and_justified(|ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                "Widen the window to show dock panels (schematic / build / console).",
+                            )
+                            .weak(),
+                        );
+                    });
+                    return;
+                }
+
                 let mut viewer = studio_dock::AppDockViewer {
                     app: self as *mut App,
                     design_id,
@@ -150,6 +181,7 @@ impl App {
                 (ToolIcon::Place, CanvasTool::PlaceSymbol, "Place (A)"),
                 (ToolIcon::Wire, CanvasTool::Wire, "Wire (W)"),
                 (ToolIcon::NetLabel, CanvasTool::NetLabel, "Net label (N)"),
+                (ToolIcon::NetLabel, CanvasTool::SheetPort, "Sheet port (K)"),
                 (ToolIcon::Power, CanvasTool::Power, "Power (P)"),
                 (ToolIcon::Junction, CanvasTool::Junction, "Junction (J)"),
                 (ToolIcon::NoConnect, CanvasTool::NoConnect, "No connect (X)"),

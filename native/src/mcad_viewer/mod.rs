@@ -77,11 +77,11 @@ impl McadViewer {
                 rect,
                 egui::Label::new(
                     egui::RichText::new(
-                    "Assign footprints on symbols to see a rough preview.\n\
+                        "Assign footprints on symbols to see a rough preview.\n\
                      (Not PCB layout — schematic footprint hints only.)",
-                )
-                        .small()
-                        .weak(),
+                    )
+                    .small()
+                    .weak(),
                 ),
             );
             return;

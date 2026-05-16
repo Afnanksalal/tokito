@@ -6,6 +6,7 @@ mod app;
 mod base_symbols;
 mod bootstrap;
 mod canvas;
+mod component_value;
 mod editor;
 mod mcad_viewer;
 mod paths;

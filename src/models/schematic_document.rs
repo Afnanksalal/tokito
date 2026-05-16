@@ -7,6 +7,7 @@ use super::{
     Position, ReplaceSchematic, SchematicInstanceInput, SchematicNetInput, SchematicPinInput,
     SchematicView,
 };
+use crate::connectivity::{point_key_xy, DisjointSet, PointKey};
 
 pub const SCHEMATIC_DOCUMENT_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_SHEET_ID: &str = "root";
@@ -83,6 +84,13 @@ pub struct DocumentPin {
     pub visible: bool,
 }
 
+/// Pin anchor for a wire endpoint (schematic instance refdes + pin name).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DocumentPinAnchor {
+    pub ref_des: String,
+    pub pin_name: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DocumentWireSegment {
     pub id: Uuid,
@@ -91,6 +99,14 @@ pub struct DocumentWireSegment {
     pub end: DocumentPoint,
     /// Optional explicit net seed, useful when importing older graph data.
     pub net_name: Option<String>,
+    /// Stable topological net id (assigned by connectivity rebuild).
+    #[serde(default)]
+    pub net_id: Option<Uuid>,
+    /// When set, `start` is derived from this pin when the symbol moves.
+    #[serde(default)]
+    pub start_pin: Option<DocumentPinAnchor>,
+    #[serde(default)]
+    pub end_pin: Option<DocumentPinAnchor>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,6 +316,9 @@ impl SchematicDocument {
                     start: a,
                     end: mid,
                     net_name: Some(net_name.clone()),
+                    net_id: None,
+                    start_pin: None,
+                    end_pin: None,
                 });
                 doc.wire_segments.push(DocumentWireSegment {
                     id: Uuid::new_v4(),
@@ -307,6 +326,9 @@ impl SchematicDocument {
                     start: mid,
                     end: b,
                     net_name: Some(net_name.clone()),
+                    net_id: None,
+                    start_pin: None,
+                    end_pin: None,
                 });
             }
             if points.len() == 1 {
@@ -573,13 +595,8 @@ impl From<&Position> for DocumentPoint {
     }
 }
 
-type PointKey = (i64, i64);
-
 fn point_key(point: DocumentPoint) -> PointKey {
-    (
-        (point.x / 0.001).round() as i64,
-        (point.y / 0.001).round() as i64,
-    )
+    point_key_xy(point.x, point.y)
 }
 
 fn point_from_key(point: PointKey) -> DocumentPoint {
@@ -743,37 +760,6 @@ fn generic_pins(pin_names: Vec<String>) -> Vec<DocumentPin> {
         .collect()
 }
 
-#[derive(Default)]
-struct DisjointSet {
-    parent: BTreeMap<PointKey, PointKey>,
-}
-
-impl DisjointSet {
-    fn make(&mut self, x: PointKey) {
-        self.parent.entry(x).or_insert(x);
-    }
-
-    fn find(&mut self, x: PointKey) -> PointKey {
-        self.make(x);
-        let p = self.parent[&x];
-        if p == x {
-            return x;
-        }
-        let root = self.find(p);
-        self.parent.insert(x, root);
-        root
-    }
-
-    fn union(&mut self, a: PointKey, b: PointKey) {
-        let ra = self.find(a);
-        let rb = self.find(b);
-        if ra != rb {
-            let (small, large) = if ra <= rb { (ra, rb) } else { (rb, ra) };
-            self.parent.insert(large, small);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -822,6 +808,9 @@ mod tests {
             start: r1_pin2,
             end: c1_pin1,
             net_name: None,
+            net_id: None,
+            start_pin: None,
+            end_pin: None,
         });
         doc.net_labels.push(DocumentNetLabel {
             id: Uuid::new_v4(),
@@ -877,6 +866,9 @@ mod tests {
             start: r1_pin2,
             end: c1_pin1,
             net_name: None,
+            net_id: None,
+            start_pin: None,
+            end_pin: None,
         });
         doc.net_labels.push(DocumentNetLabel {
             id: Uuid::new_v4(),
@@ -991,6 +983,9 @@ mod tests {
             start: r1_pin2,
             end: c1_pin1,
             net_name: Some("KEEP".to_string()),
+            net_id: None,
+            start_pin: None,
+            end_pin: None,
         });
         doc.no_connects.push(DocumentNoConnect {
             id: Uuid::new_v4(),
@@ -1054,5 +1049,28 @@ mod tests {
         assert_eq!(normalized.instances.len(), 2);
         assert!(normalized.nets.iter().any(|n| n.name == "VCC"));
         assert_eq!(normalized.pins.len(), 2);
+    }
+
+    #[test]
+    fn wire_segment_pin_anchor_json_round_trip() {
+        let seg = DocumentWireSegment {
+            id: Uuid::new_v4(),
+            sheet_id: DEFAULT_SHEET_ID.to_string(),
+            start: DocumentPoint { x: 0.0, y: 0.0 },
+            end: DocumentPoint { x: 40.0, y: 0.0 },
+            net_name: Some("NET_A".into()),
+            net_id: Some(Uuid::new_v4()),
+            start_pin: Some(DocumentPinAnchor {
+                ref_des: "R1".into(),
+                pin_name: "2".into(),
+            }),
+            end_pin: None,
+        };
+        let json = serde_json::to_string(&seg).unwrap();
+        let back: DocumentWireSegment = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.start_pin.as_ref().unwrap().ref_des, "R1");
+        assert_eq!(back.start_pin.as_ref().unwrap().pin_name, "2");
+        assert!(back.end_pin.is_none());
+        assert_eq!(back.net_id, seg.net_id);
     }
 }

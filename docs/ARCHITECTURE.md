@@ -61,10 +61,13 @@ flowchart TD
 
 | Area | Role |
 |------|------|
-| `native/src/editor/` | Canvas, tools, geometry, undo |
+| `native/src/editor/` | Canvas, tools, connectivity sync, ERC markers, undo |
 | `native/src/app/studio/` | Dock, panels, inspector, Build, command palette |
 | `native/src/mcad_viewer/` | 3D board preview |
-| `native/src/base_symbols/` | Built-in `.tokito_sym` libraries |
+| `native/src/base_symbols/` | Symbol libraries (`.tokito_sym`, imported `.kicad_sym`) |
+| `src/connectivity/` | Shared net graph (union-find, net ids, labels) |
+
+Editor behavior and exports: [SCHEMATIC_EDITOR.md](SCHEMATIC_EDITOR.md).
 
 ## Repository layout
 

@@ -6,7 +6,7 @@ use super::hit_test::PIN_HIT_RADIUS;
 use super::state::{PartCache, SchematicEditor};
 use super::tools::CanvasTool;
 use crate::base_symbols::BaseSymbolLibrary;
-use crate::canvas::{display_pins_for_symbol, route_segments, symbol_pin_world, GRID_PX};
+use crate::canvas::{display_pins_for_symbol, symbol_hit_half_extents, symbol_pin_world};
 use crate::symbols_draw;
 use crate::ui::tokens::UiTokens;
 
@@ -66,9 +66,7 @@ pub fn paint_grid(painter: &Painter, rect: Rect, editor: &SchematicEditor, token
 pub fn paint_sheet_frame(painter: &Painter, ctx: &RenderCtx<'_>) {
     let vp = &ctx.editor.viewport;
     let origin = ctx.origin;
-    let w = 50.0 * GRID_PX;
-    let h = 35.0 * GRID_PX;
-    let frame = egui::Rect::from_min_size(Pos2::new(-w * 0.5, -h * 0.5), egui::vec2(w, h));
+    let frame = crate::canvas::sheet_bounds_world();
     let stroke = Stroke::new(1.0, ctx.tokens.canvas_frame);
     let tl = vp.world_to_screen(origin, frame.min);
     let br = vp.world_to_screen(origin, frame.max);
@@ -186,14 +184,31 @@ pub fn paint_annotations(painter: &Painter, ctx: &RenderCtx<'_>) {
         } else {
             t.label_ink
         };
-        painter.text(
-            p + Vec2::new(8.0, -8.0),
-            egui::Align2::LEFT_CENTER,
-            &label.name,
-            egui::FontId::monospace(12.0),
-            color,
-        );
-        painter.line_segment([p, p + Vec2::new(22.0, 0.0)], Stroke::new(1.4, color));
+        if label.kind == tokito::models::NetLabelKind::Hierarchical {
+            let sz = Vec2::new(28.0, 18.0);
+            let r = egui::Rect::from_min_size(p, sz);
+            painter.rect_stroke(r, 2.0, Stroke::new(1.5, color));
+            painter.line_segment(
+                [r.center() - Vec2::new(6.0, 0.0), r.right_center()],
+                Stroke::new(1.5, color),
+            );
+            painter.text(
+                r.min + Vec2::new(4.0, 2.0),
+                egui::Align2::LEFT_TOP,
+                &label.name,
+                egui::FontId::monospace(10.0),
+                color,
+            );
+        } else {
+            painter.text(
+                p + Vec2::new(8.0, -8.0),
+                egui::Align2::LEFT_CENTER,
+                &label.name,
+                egui::FontId::monospace(12.0),
+                color,
+            );
+            painter.line_segment([p, p + Vec2::new(22.0, 0.0)], Stroke::new(1.4, color));
+        }
     }
 
     for (i, junction) in ctx.editor.junctions.iter().enumerate() {
@@ -304,7 +319,8 @@ pub fn paint_symbols(
         let ref_des = ctx.editor.symbols[i].ref_des.clone();
         let sym = &ctx.editor.symbols[i];
         let p = vp.world_to_screen(origin, sym.pos);
-        let size = Vec2::new(140.0 * z, 62.0 * z);
+        let (hx, hy) = symbol_hit_half_extents(sym);
+        let size = Vec2::new(hx * 2.0 * z, hy * 2.0 * z);
         let r = Rect::from_center_size(p, size);
 
         let selected = ctx.editor.selected_syms.contains(&ref_des)
@@ -329,52 +345,63 @@ pub fn paint_symbols(
         }
 
         let kind = symbols_draw::kind_from_refdes(&ref_des);
-        let lw = r.width() * 0.38;
-        let lh = r.height() * 0.4;
         let stroke_px = (1.65 * z).clamp(1.25, 3.0);
-        let spec = crate::base_symbols::SymbolPaintSpec::new(
-            p,
-            lw,
-            lh,
-            sym.rotation_deg,
-            kind,
+        let canvas_paint = crate::base_symbols::CanvasSymbolPaint {
+            painter,
+            viewport: vp,
+            origin,
+            sym_pos: sym.pos,
+            rot_deg: sym.rotation_deg,
             ink,
+            outline: t.sym_outline,
             stroke_px,
-            t.sym_outline,
-        );
+        };
         if let Some(lib) = ctx.symbol_lib {
-            lib.paint_kind_or_fallback(painter, spec);
+            if let Some(id) = sym.symbol_id.as_deref().filter(|s| !s.is_empty()) {
+                lib.paint_named_on_canvas(canvas_paint, id, kind, &sym.pin_layout);
+            } else {
+                crate::base_symbols::paint_fallback_on_canvas(&canvas_paint, kind);
+                crate::base_symbols::paint_pin_stubs_from_layout(&canvas_paint, &sym.pin_layout);
+            }
         } else {
-            symbols_draw::paint_symbol_body(
-                painter,
-                p,
-                lw,
-                lh,
-                sym.rotation_deg,
-                kind,
-                ink,
-                stroke_px,
-            );
+            crate::base_symbols::paint_fallback_on_canvas(&canvas_paint, kind);
+            crate::base_symbols::paint_pin_stubs_from_layout(&canvas_paint, &sym.pin_layout);
         }
 
-        painter.text(
-            r.center_top() + Vec2::new(0.0, -8.0 * z),
-            egui::Align2::CENTER_BOTTOM,
+        let lib_sym = sym
+            .symbol_id
+            .as_deref()
+            .and_then(|id| ctx.symbol_lib.and_then(|lib| lib.symbol(id)));
+        let field_paint = crate::base_symbols::CanvasSymbolPaint {
+            painter,
+            viewport: vp,
+            origin,
+            sym_pos: sym.pos,
+            rot_deg: sym.rotation_deg,
+            ink,
+            outline: t.sym_outline,
+            stroke_px,
+        };
+        let bounds_half = symbol_hit_half_extents(sym);
+        crate::base_symbols::paint_symbol_fields(
+            &field_paint,
+            lib_sym,
             &ref_des,
-            egui::FontId::monospace(12.5 * z),
+            &sym.value,
             t.refdes_ink,
+            bounds_half,
         );
-        let mpn = sym
-            .part_id
-            .and_then(|pid| ctx.part_cache.get(&pid).cloned())
-            .unwrap_or_else(|| "—".to_string());
-        painter.text(
-            r.center_bottom() + Vec2::new(0.0, 10.0 * z),
-            egui::Align2::CENTER_TOP,
-            mpn,
-            egui::FontId::proportional(10.5 * z),
-            t.text_muted,
-        );
+        if let Some(mpn) = sym.part_id.and_then(|pid| ctx.part_cache.get(&pid)) {
+            if !mpn.is_empty() && mpn != &sym.value {
+                painter.text(
+                    r.center_bottom() + Vec2::new(0.0, 6.0 * z),
+                    egui::Align2::CENTER_TOP,
+                    mpn,
+                    egui::FontId::proportional((9.0 * z).clamp(8.0, 14.0)),
+                    t.text_muted,
+                );
+            }
+        }
 
         let pins = display_pins_for_symbol(sym, &ctx.editor.wire_segments);
         for pin_name in pins {
@@ -392,16 +419,20 @@ pub fn paint_symbols(
                 } else {
                     t.pin_ink
                 };
-            let pr = if pin_hover { 5.0 } else { 3.5 };
-            painter.circle_filled(pin_screen, pr + 0.8, t.sym_outline);
+            let pr = if pin_hover {
+                crate::canvas::PIN_VIS_RADIUS_HOVER
+            } else {
+                crate::canvas::PIN_VIS_RADIUS
+            };
+            painter.circle_filled(pin_screen, pr + 0.5, t.sym_outline);
             painter.circle_filled(pin_screen, pr, pin_color);
-            painter.circle_stroke(pin_screen, pr, Stroke::new(1.0, t.sym_ink));
-            if z >= 0.55 {
+            painter.circle_stroke(pin_screen, pr, Stroke::new(0.85, t.sym_ink));
+            if z >= 0.85 {
                 painter.text(
-                    pin_screen + Vec2::new(0.0, -9.0),
+                    pin_screen + Vec2::new(0.0, -7.0),
                     egui::Align2::CENTER_BOTTOM,
                     &pin_name,
-                    egui::FontId::monospace(9.5 * z.max(0.8)),
+                    egui::FontId::monospace((8.5 * z).clamp(8.0, 12.0)),
                     t.text_muted,
                 );
             }
@@ -426,11 +457,11 @@ pub fn paint_wire_rubber_band(
     let end = ctx
         .editor
         .snap_world(ctx.editor.viewport.screen_to_world(ctx.origin, pointer));
-    for (a, b) in route_segments(start, &[], end) {
+    for seg in crate::canvas::manhattan_segments(start, end, "") {
         painter.line_segment(
             [
-                ctx.editor.viewport.world_to_screen(ctx.origin, a),
-                ctx.editor.viewport.world_to_screen(ctx.origin, b),
+                ctx.editor.viewport.world_to_screen(ctx.origin, seg.start),
+                ctx.editor.viewport.world_to_screen(ctx.origin, seg.end),
             ],
             Stroke::new(1.8, ctx.tokens.pin_hot),
         );

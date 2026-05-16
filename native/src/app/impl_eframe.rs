@@ -140,14 +140,6 @@ impl eframe::App for App {
                     self.command_palette_open = true;
                 }
 
-                if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    self.editor.wire_drag_from = None;
-                }
-
-                if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
-                    self.delete_selected();
-                }
-
                 let submit = ctx.input(|i| {
                     i.key_pressed(egui::Key::Enter)
                         && (i.modifiers.ctrl || i.modifiers.command)
@@ -156,79 +148,9 @@ impl eframe::App for App {
                     self.run_prompt_draft(design_id, ctx);
                 }
 
-                if !ctx.wants_keyboard_input() {
-                    if ctx.input(|i| i.key_pressed(egui::Key::Q)) {
-                        self.editor.tool = CanvasTool::Select;
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::A)) {
-                        self.place_generic_symbol("U");
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::W)) {
-                        self.editor.tool = CanvasTool::Wire;
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::N)) {
-                        self.editor.tool = CanvasTool::NetLabel;
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::P)) {
-                        self.editor.tool = CanvasTool::Power;
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::J)) {
-                        self.editor.tool = CanvasTool::Junction;
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::X)) {
-                        self.editor.tool = CanvasTool::NoConnect;
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::B)) {
-                        self.editor.tool = CanvasTool::Bus;
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::T)) {
-                        self.editor.tool = CanvasTool::Text;
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::H)) {
-                        self.editor.tool = CanvasTool::Pan;
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::G)) {
-                        self.editor.show_grid = !self.editor.show_grid;
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::S))
-                        && !ctx.input(|i| i.modifiers.ctrl || i.modifiers.command)
-                    {
-                        self.editor.snap_enabled = !self.editor.snap_enabled;
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::Home)) {
-                        self.editor.request_zoom_fit();
-                    }
-                    if ctx.input(|i| i.key_pressed(egui::Key::R)) {
-                        self.editor.rotate_selected_symbols(90.0);
-                    }
-                    if ctx.input(|i| {
-                        i.key_pressed(egui::Key::D)
-                            && (i.modifiers.ctrl || i.modifiers.command)
-                    }) {
-                        self.duplicate_selection();
-                    }
-
-                    let undo = ctx.input(|i| {
-                        (i.modifiers.ctrl || i.modifiers.command)
-                            && !i.modifiers.shift
-                            && i.key_pressed(egui::Key::Z)
-                    });
-                    let redo = ctx.input(|i| {
-                        (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Y)
-                    }) || ctx.input(|i| {
-                        (i.modifiers.ctrl || i.modifiers.command)
-                            && i.modifiers.shift
-                            && i.key_pressed(egui::Key::Z)
-                    });
-                    if undo {
-                        self.undo_canvas();
-                    }
-                    if redo {
-                        self.redo_canvas();
-                    }
-                }
-
                 self.ui_studio(ctx, design_id);
+
+                self.handle_studio_shortcuts(ctx);
             }
         }
     }

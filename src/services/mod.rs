@@ -1,6 +1,7 @@
 //! External integrations and agent orchestration.
 
 pub mod agent;
+pub mod catalog_part;
 pub mod catalog_search;
 pub mod design_pipeline;
 pub mod erc_fixes;

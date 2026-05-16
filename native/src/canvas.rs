@@ -1,5 +1,7 @@
 //! Schematic canvas types and viewport math (world ↔ screen, grid snap).
 
+use std::collections::BTreeMap;
+
 use egui::{Pos2, Vec2};
 use uuid::Uuid;
 
@@ -7,12 +9,82 @@ use uuid::Uuid;
 pub const GRID_PX: f32 = 40.0;
 pub const CANVAS_UNDO_CAP: usize = 100;
 
+/// Standard schematic grid pitch in millimetres (50 mil — same as common ECAD editors).
+pub const SCH_MM_PER_GRID: f32 = 1.27;
+/// Default pin-to-body spacing in millimetres (150 mil).
+pub const SCH_PIN_PITCH_MM: f32 = 3.81;
+
+/// World units per millimetre of library geometry (pins and graphics share this).
+#[inline]
+pub fn sch_world_per_mm() -> f32 {
+    GRID_PX / SCH_MM_PER_GRID
+}
+
+/// ISO A4 schematic page (matches common ECAD sheet size in mm).
+pub const SHEET_WIDTH_MM: f32 = 297.0;
+pub const SHEET_HEIGHT_MM: f32 = 210.0;
+
+/// Sheet border size in world units (centered on origin).
+#[inline]
+pub fn sheet_size_world() -> (f32, f32) {
+    let wpm = sch_world_per_mm();
+    (SHEET_WIDTH_MM * wpm, SHEET_HEIGHT_MM * wpm)
+}
+
+#[inline]
+pub fn sheet_bounds_world() -> egui::Rect {
+    let (w, h) = sheet_size_world();
+    egui::Rect::from_center_size(egui::Pos2::ZERO, egui::vec2(w, h))
+}
+
+/// World-space symbol body half-extents fallback when pins are unknown.
+pub const SYM_HALF_W: f32 = 56.0;
+pub const SYM_HALF_H: f32 = 25.0;
+/// Default pin distance from symbol origin for generated fallbacks.
+pub fn pin_pitch_world() -> f32 {
+    SCH_PIN_PITCH_MM * sch_world_per_mm()
+}
+pub const PIN_EDGE_WORLD: f32 = SCH_PIN_PITCH_MM * (GRID_PX / SCH_MM_PER_GRID);
+
+/// Default schematic field height in mm (50 mil).
+pub const SCH_FIELD_FONT_MM: f32 = 1.27;
+/// Pin connection dot radius on canvas (screen px, before zoom clamp).
+pub const PIN_VIS_RADIUS: f32 = 2.25;
+pub const PIN_VIS_RADIUS_HOVER: f32 = 3.25;
+/// Extra hit/paint margin around symbol pin bounds (world units).
+pub const SYMBOL_HIT_PAD: f32 = 6.0;
+
 #[inline]
 pub fn snap_world_pos(p: Pos2) -> Pos2 {
     Pos2::new(
         (p.x / GRID_PX).round() * GRID_PX,
         (p.y / GRID_PX).round() * GRID_PX,
     )
+}
+
+/// Half-size of symbol hit/paint bounds from pin layout (world units).
+pub fn symbol_hit_half_extents(sym: &Sym) -> (f32, f32) {
+    if sym.pin_layout.is_empty() {
+        return (SYM_HALF_W, SYM_HALF_H);
+    }
+    let mut hx = 16.0_f32;
+    let mut hy = 16.0_f32;
+    for (_, x, y) in &sym.pin_layout {
+        hx = hx.max(x.abs());
+        hy = hy.max(y.abs());
+    }
+    (hx + SYMBOL_HIT_PAD, hy + SYMBOL_HIT_PAD)
+}
+
+/// After placement, nudge the symbol so its first pin sits on the schematic grid.
+pub fn snap_symbol_pins_to_grid(sym: &mut Sym) {
+    sym.pos = snap_world_pos(sym.pos);
+    let Some((ref pin_name, _, _)) = sym.pin_layout.first() else {
+        return;
+    };
+    let pin_world = symbol_pin_world(sym, pin_name);
+    let snapped = snap_world_pos(pin_world);
+    sym.pos += snapped - pin_world;
 }
 
 #[derive(Clone)]
@@ -28,6 +100,34 @@ pub struct Sym {
     pub symbol_id: Option<String>,
     /// Pin name + local offset (mm) relative to symbol center before rotation.
     pub pin_layout: Vec<(String, f32, f32)>,
+    /// Schematic **Value** field (e.g. `10k`, `100n`, `MCP6002`).
+    pub value: String,
+    /// Extra symbol fields (`Footprint`, `Datasheet`, …).
+    pub fields: BTreeMap<String, String>,
+}
+
+impl Sym {
+    pub fn new_placed(
+        ref_des: String,
+        symbol_id: Option<String>,
+        value: String,
+        pos: Pos2,
+        pins: Vec<String>,
+        pin_layout: Vec<(String, f32, f32)>,
+    ) -> Self {
+        Self {
+            ref_des,
+            part_id: None,
+            pos,
+            rotation_deg: 0.0,
+            pins,
+            footprint_ref: None,
+            symbol_id,
+            pin_layout,
+            value,
+            fields: BTreeMap::new(),
+        }
+    }
 }
 
 /// First-class orthogonal wire segment (CAD geometry).
@@ -36,7 +136,14 @@ pub struct WireSegment {
     pub id: uuid::Uuid,
     pub start: Pos2,
     pub end: Pos2,
+    /// Topological net identity (stable across connected copper).
+    pub net_id: uuid::Uuid,
+    /// Human-readable net name (from labels / power / hints).
     pub net: String,
+    /// Pin-attached start; position follows symbol when set.
+    pub start_pin: Option<PinEndpoint>,
+    /// Pin-attached end; position follows symbol when set.
+    pub end_pin: Option<PinEndpoint>,
 }
 
 impl WireSegment {
@@ -45,7 +152,26 @@ impl WireSegment {
             id: uuid::Uuid::new_v4(),
             start,
             end,
+            net_id: uuid::Uuid::new_v4(),
             net: net.into(),
+            start_pin: None,
+            end_pin: None,
+        }
+    }
+}
+
+/// Update segment endpoints that are anchored to symbol pins.
+pub fn sync_anchored_wire_endpoints(segments: &mut [WireSegment], symbols: &[Sym]) {
+    for seg in segments.iter_mut() {
+        if let Some(pin) = &seg.start_pin {
+            if let Some(sym) = symbols.iter().find(|s| s.ref_des == pin.ref_des) {
+                seg.start = symbol_pin_world(sym, &pin.pin_name);
+            }
+        }
+        if let Some(pin) = &seg.end_pin {
+            if let Some(sym) = symbols.iter().find(|s| s.ref_des == pin.ref_des) {
+                seg.end = symbol_pin_world(sym, &pin.pin_name);
+            }
         }
     }
 }
@@ -61,17 +187,64 @@ pub struct Wire {
     pub bends: Vec<Pos2>,
 }
 
-/// Build Manhattan segments between two world points.
+const ORTHO_EPS: f32 = 0.5;
+
+/// True when a segment is strictly horizontal or vertical.
+pub fn segment_is_orthogonal(seg: &WireSegment) -> bool {
+    (seg.start.x - seg.end.x).abs() <= ORTHO_EPS || (seg.start.y - seg.end.y).abs() <= ORTHO_EPS
+}
+
+/// Snap wire vertex to schematic grid.
+#[inline]
+pub fn snap_wire_vertex(p: Pos2) -> Pos2 {
+    snap_world_pos(p)
+}
+
+/// Build Manhattan (H/V only) segments between two points; endpoints snap to grid.
 pub fn manhattan_segments(start: Pos2, end: Pos2, net: impl Into<String>) -> Vec<WireSegment> {
     let net = net.into();
-    if (start.x - end.x).abs() < f32::EPSILON || (start.y - end.y).abs() < f32::EPSILON {
+    let start = snap_wire_vertex(start);
+    let end = snap_wire_vertex(end);
+    if start.distance(end) <= ORTHO_EPS {
+        return vec![];
+    }
+    if (start.x - end.x).abs() <= ORTHO_EPS || (start.y - end.y).abs() <= ORTHO_EPS {
         return vec![WireSegment::new(start, end, net)];
     }
-    let mid = Pos2::new(end.x, start.y);
+    // Prefer exiting horizontally first when x separation dominates (common for pin stubs).
+    let mid = if (start.x - end.x).abs() >= (start.y - end.y).abs() {
+        Pos2::new(end.x, start.y)
+    } else {
+        Pos2::new(start.x, end.y)
+    };
+    let mid = snap_wire_vertex(mid);
     vec![
         WireSegment::new(start, mid, net.clone()),
         WireSegment::new(mid, end, net),
     ]
+}
+
+/// Split any non-orthogonal segment into H/V Manhattan pieces.
+pub fn orthogonalize_segments(segments: &[WireSegment]) -> Vec<WireSegment> {
+    let mut out = Vec::new();
+    for seg in segments {
+        if segment_is_orthogonal(seg) {
+            out.push(seg.clone());
+        } else {
+            let pieces = manhattan_segments(seg.start, seg.end, seg.net.clone());
+            let n = pieces.len();
+            for (i, mut s) in pieces.into_iter().enumerate() {
+                if i == 0 {
+                    s.start_pin = seg.start_pin.clone();
+                }
+                if i + 1 == n {
+                    s.end_pin = seg.end_pin.clone();
+                }
+                out.push(s);
+            }
+        }
+    }
+    out
 }
 
 /// Convert legacy wire + symbol positions into segments.
@@ -85,7 +258,19 @@ pub fn wire_to_segments(w: &Wire, symbols: &[Sym]) -> Vec<WireSegment> {
             let points = route_points(pa, &w.bends, pb);
             let mut out = Vec::new();
             for pair in points.windows(2) {
-                out.push(WireSegment::new(pair[0], pair[1], w.net.clone()));
+                out.extend(manhattan_segments(pair[0], pair[1], w.net.clone()));
+            }
+            if let Some(first) = out.first_mut() {
+                first.start_pin = Some(PinEndpoint {
+                    ref_des: w.a.clone(),
+                    pin_name: w.a_pin.clone(),
+                });
+            }
+            if let Some(last) = out.last_mut() {
+                last.end_pin = Some(PinEndpoint {
+                    ref_des: w.b.clone(),
+                    pin_name: w.b_pin.clone(),
+                });
             }
             out
         }
@@ -93,7 +278,7 @@ pub fn wire_to_segments(w: &Wire, symbols: &[Sym]) -> Vec<WireSegment> {
     }
 }
 
-const PIN_ATTACH_RADIUS: f32 = 18.0;
+pub(crate) const PIN_ATTACH_RADIUS: f32 = 18.0;
 
 /// Pin names that have a segment endpoint within attach radius.
 pub fn display_pins_for_symbol(sym: &Sym, segments: &[WireSegment]) -> Vec<String> {
@@ -212,9 +397,9 @@ pub fn symbol_pin_world(sym: &Sym, pin_name: &str) -> Pos2 {
             "2" | "b" | "out" | "vout" | "sda" | "scl" | "tx" | "miso"
         ) || pin_name.ends_with("_b");
         if right_side {
-            Vec2::new(70.0, 0.0)
+            Vec2::new(pin_pitch_world(), 0.0)
         } else {
-            Vec2::new(-70.0, 0.0)
+            Vec2::new(-pin_pitch_world(), 0.0)
         }
     };
     let turns = ((sym.rotation_deg / 90.0).round() as i32).rem_euclid(4);
@@ -236,10 +421,20 @@ pub fn route_points(a: Pos2, bends: &[Pos2], b: Pos2) -> Vec<Pos2> {
 }
 
 pub fn route_segments(a: Pos2, bends: &[Pos2], b: Pos2) -> Vec<(Pos2, Pos2)> {
-    route_points(a, bends, b)
-        .windows(2)
-        .map(|w| (w[0], w[1]))
-        .collect()
+    let mut out = Vec::new();
+    let mut cur = snap_wire_vertex(a);
+    for bend in bends {
+        let next = snap_wire_vertex(*bend);
+        for seg in manhattan_segments(cur, next, "") {
+            out.push((seg.start, seg.end));
+        }
+        cur = next;
+    }
+    let end = snap_wire_vertex(b);
+    for seg in manhattan_segments(cur, end, "") {
+        out.push((seg.start, seg.end));
+    }
+    out
 }
 
 pub fn manhattan_bends(a: Pos2, b: Pos2) -> Vec<Pos2> {
@@ -263,5 +458,108 @@ impl Viewport {
     pub fn screen_to_world(&self, origin: Pos2, s: Pos2) -> Pos2 {
         let v = (s - origin - self.pan) / self.zoom;
         Pos2::new(v.x, v.y)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::Pos2;
+
+    #[test]
+    fn orthogonalize_splits_diagonal_segment() {
+        let diag = WireSegment::new(Pos2::new(0.0, 0.0), Pos2::new(80.0, 80.0), "N");
+        assert!(!segment_is_orthogonal(&diag));
+        let fixed = orthogonalize_segments(&[diag]);
+        assert!(fixed.len() >= 2);
+        assert!(fixed.iter().all(segment_is_orthogonal));
+    }
+
+    #[test]
+    fn sync_anchored_wire_endpoints_follows_symbol_move() {
+        let mut sym = Sym {
+            ref_des: "R1".into(),
+            part_id: None,
+            pos: Pos2::new(0.0, 0.0),
+            rotation_deg: 0.0,
+            pins: vec!["1".into(), "2".into()],
+            footprint_ref: None,
+            symbol_id: Some("Device:R".into()),
+            pin_layout: vec![
+                ("1".into(), -pin_pitch_world(), 0.0),
+                ("2".into(), pin_pitch_world(), 0.0),
+            ],
+            value: "R".into(),
+            fields: BTreeMap::new(),
+        };
+        let pin2 = symbol_pin_world(&sym, "2");
+        let mut segments = vec![WireSegment {
+            id: Uuid::new_v4(),
+            start: Pos2::new(-pin_pitch_world(), 0.0),
+            end: pin2,
+            net_id: Uuid::new_v4(),
+            net: "NET1".into(),
+            start_pin: None,
+            end_pin: Some(PinEndpoint {
+                ref_des: "R1".into(),
+                pin_name: "2".into(),
+            }),
+        }];
+        sym.pos = Pos2::new(200.0, 100.0);
+        sync_anchored_wire_endpoints(&mut segments, &[sym.clone()]);
+        let expected = symbol_pin_world(&sym, "2");
+        assert!(
+            segments[0].end.distance(expected) < 0.01,
+            "end should follow pin after move"
+        );
+    }
+
+    #[test]
+    fn wire_to_segments_sets_pin_anchors() {
+        let sym_a = Sym {
+            ref_des: "R1".into(),
+            part_id: None,
+            pos: Pos2::ZERO,
+            rotation_deg: 0.0,
+            pins: vec!["1".into(), "2".into()],
+            footprint_ref: None,
+            symbol_id: None,
+            pin_layout: vec![
+                ("1".into(), -pin_pitch_world(), 0.0),
+                ("2".into(), pin_pitch_world(), 0.0),
+            ],
+            value: "10k".into(),
+            fields: BTreeMap::new(),
+        };
+        let sym_b = Sym {
+            ref_des: "C1".into(),
+            part_id: None,
+            pos: Pos2::new(200.0, 0.0),
+            rotation_deg: 0.0,
+            pins: vec!["1".into(), "2".into()],
+            footprint_ref: None,
+            symbol_id: None,
+            pin_layout: vec![
+                ("1".into(), -pin_pitch_world(), 0.0),
+                ("2".into(), pin_pitch_world(), 0.0),
+            ],
+            value: "100n".into(),
+            fields: BTreeMap::new(),
+        };
+        let w = Wire {
+            a: "R1".into(),
+            a_pin: "2".into(),
+            b: "C1".into(),
+            b_pin: "1".into(),
+            net: "N1".into(),
+            bends: vec![],
+        };
+        let segs = wire_to_segments(&w, &[sym_a, sym_b]);
+        assert!(!segs.is_empty());
+        assert_eq!(
+            segs.first().unwrap().start_pin.as_ref().unwrap().ref_des,
+            "R1"
+        );
+        assert_eq!(segs.last().unwrap().end_pin.as_ref().unwrap().ref_des, "C1");
     }
 }

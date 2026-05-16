@@ -80,29 +80,16 @@ impl App {
     }
 
     pub(crate) fn run_erc_on_editor(&mut self) {
+        self.editor.refresh_wire_connectivity();
         let doc = self.graph_to_document();
         let (body, _) = doc.to_replace_schematic();
         self.erc_violations = tokito::services::schematic_validate::erc_full(&body, &doc);
         self.set_erc_note_from_slice(&self.erc_violations.clone());
-        self.editor.erc_markers = tokito::services::schematic_validate::violations_to_erc_markers(
-            &self.erc_violations,
-            tokito::models::DEFAULT_SHEET_ID,
-            (120.0, 80.0),
-        )
-        .into_iter()
-        .enumerate()
-        .map(|(i, m)| {
-            let v = &self.erc_violations[i];
-            crate::editor::ErcMarkerOnCanvas {
-                code: m.code,
-                message: m.message,
-                severity: m.severity,
-                position: egui::Pos2::new(m.position.x as f32, m.position.y as f32),
-                instance_ref: v.instance_ref.clone(),
-                net_name: v.net_name.clone(),
-            }
-        })
-        .collect();
+        self.editor.erc_markers = self
+            .erc_violations
+            .iter()
+            .map(|v| crate::editor::live_erc::violation_to_canvas_marker(v, &self.editor))
+            .collect();
         self.log_console(format!("ERC: {} issue(s).", self.erc_violations.len()));
     }
 

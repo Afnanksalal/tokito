@@ -4,7 +4,7 @@ use crate::app::{App, PartRow};
 use crate::editor::CanvasTool;
 use crate::symbols_draw::CompKind;
 
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PlaceScope {
     #[default]
     All,
@@ -83,7 +83,7 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.symbol_import_path)
-                            .hint_text("Folder with .tokito_sym…")
+                            .hint_text("Folder with .tokito_sym / .kicad_sym…")
                             .desired_width(ui.available_width() - 72.0),
                     );
                     if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Import").clicked() {
@@ -92,6 +92,21 @@ impl App {
                 });
             });
         ui.add_space(6.0);
+
+        if !self.place_query.trim().is_empty() {
+            match self.place_scope {
+                PlaceScope::Parts | PlaceScope::Catalog | PlaceScope::All => {
+                    let key = format!("{:?}|{}", self.place_scope, self.place_query.trim());
+                    let id = ui.id().with("place_auto_search");
+                    let last = ui.data_mut(|d| d.get_temp::<String>(id));
+                    if last.as_deref() != Some(key.as_str()) {
+                        ui.data_mut(|d| d.insert_temp(id, key));
+                        self.run_place_search();
+                    }
+                }
+                _ => {}
+            }
+        }
 
         egui::ScrollArea::vertical()
             .id_salt("place_panel_scroll")
@@ -120,25 +135,44 @@ impl App {
 
     fn render_place_catalog(&mut self, ui: &mut egui::Ui, tokens: &crate::ui::tokens::UiTokens) {
         let ty = crate::ui::TypeRamp::default();
-        ui.label(
-            ty.small_weak("Search LCSC/Nexar, then Place. Set footprint in Properties.")
-                .color(tokens.text_muted),
-        );
+        let lcsc_on = self.lcsc_catalog_enabled();
+        let nexar_on = self.state.nexar.is_some();
+        let status = if lcsc_on && nexar_on {
+            "LCSC + Nexar catalog search enabled"
+        } else if lcsc_on {
+            "LCSC catalog search enabled"
+        } else if nexar_on {
+            "Nexar catalog search enabled (LCSC off — set TOKITO_LCSC_ANONYMOUS_SEARCH=true)"
+        } else {
+            "Catalog disabled — enable LCSC in .env (TOKITO_LCSC_ANONYMOUS_SEARCH=true)"
+        };
+        ui.label(ty.small_weak(status).color(tokens.text_muted));
         ui.add_space(6.0);
         if self.place_query.trim().is_empty() {
             ui.label(
-                ty.small_weak("Enter MPN or keyword, then Search.")
+                ty.small_weak("Type MPN or keyword above (search runs automatically).")
                     .color(tokens.text_muted),
             );
+            return;
+        }
+        if !lcsc_on && !nexar_on {
             return;
         }
         if self.catalog_hits.is_empty() {
             ui.label(
-                ty.small_weak("No catalog hits — run Search. Enable TOKITO_LCSC_ANONYMOUS_SEARCH=true in .env")
+                ty.small_weak("No catalog hits — check spelling or try Search again.")
                     .color(tokens.text_muted),
             );
+            if crate::ui::widgets::secondary_button(ui, tokens, "Search again").clicked() {
+                self.search_catalog();
+            }
             return;
         }
+        ui.label(
+            ty.small_weak("Click Place or a row, then click the schematic.")
+                .color(tokens.text_muted),
+        );
+        ui.add_space(4.0);
         let hits = self.catalog_hits.clone();
         for h in hits {
             self.render_catalog_row(ui, tokens, &h);
@@ -262,12 +296,22 @@ impl App {
         ty: &crate::ui::TypeRamp,
     ) {
         let hits = self.symbol_hits();
-        if hits.is_empty() {
+        if self.base_symbols.is_none() {
+            ui.label(
+                ty.small_weak("Symbol library failed to load — restart the app.")
+                    .color(tokens.text_muted),
+            );
+        } else if hits.is_empty() {
             ui.label(
                 ty.small_weak("No symbols match. Try Device:R, LM358, GND…")
                     .color(tokens.text_muted),
             );
         } else {
+            ui.label(
+                ty.small_weak("Click Place or a row, then click the schematic.")
+                    .color(tokens.text_muted),
+            );
+            ui.add_space(4.0);
             for name in hits {
                 self.render_symbol_row(ui, tokens, &name);
             }
@@ -289,18 +333,28 @@ impl App {
         let ty = crate::ui::TypeRamp::default();
         if self.place_query.trim().is_empty() {
             ui.label(
-                ty.small_weak("Enter MPN or description, then Search.")
-                    .color(tokens.text_muted),
+                ty.small_weak(
+                    "Type MPN or description in the search box above (search runs automatically).",
+                )
+                .color(tokens.text_muted),
             );
             return;
         }
         if self.parts_hits.is_empty() {
             ui.label(
-                ty.small_weak("No parts found. Run Search after typing a query.")
+                ty.small_weak("No parts found — try another keyword or check the database.")
                     .color(tokens.text_muted),
             );
+            if crate::ui::widgets::secondary_button(ui, tokens, "Search again").clicked() {
+                self.search_parts_catalog();
+            }
             return;
         }
+        ui.label(
+            ty.small_weak("Click Place or a row, then click the schematic.")
+                .color(tokens.text_muted),
+        );
+        ui.add_space(4.0);
         let parts = self.parts_hits.clone();
         for p in parts {
             self.render_part_row(ui, tokens, &p);
@@ -342,7 +396,7 @@ impl App {
                 ui.set_min_height(40.0);
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(52.0, 36.0), egui::Sense::hover());
-                paint_preview_symbol(ui, self.base_symbols.as_ref(), rect, kind);
+                paint_preview_primitive(ui, self.base_symbols.as_ref(), rect, kind);
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new(label).size(12.0));
                     ui.label(
@@ -373,8 +427,7 @@ impl App {
         let name_owned = name.to_string();
         let placed = place_list_row(ui, tokens, |ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(52.0, 36.0), egui::Sense::hover());
-            let kind = crate::symbols_draw::kind_from_refdes(short);
-            paint_preview_symbol(ui, self.base_symbols.as_ref(), rect, kind);
+            paint_preview_symbol(ui, self.base_symbols.as_ref(), rect, Some(name));
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(short).monospace().strong());
                 if name.contains(':') {
@@ -438,44 +491,36 @@ impl App {
 
     fn place_symbol_from_library(&mut self, name: &str) {
         let label = name.to_string();
-        let p = name
-            .rsplit(':')
-            .next()
-            .unwrap_or(name)
-            .chars()
-            .next()
-            .unwrap_or('U');
-        let pre = match p {
-            'R' => "R",
-            'C' => "C",
-            'L' => "L",
-            'D' => "D",
-            'Q' => "Q",
-            'J' => "J",
-            _ => "U",
-        };
+        let pre = crate::base_symbols::BaseSymbolLibrary::refdes_prefix_for_library_id(name);
         let pin_layout = self
             .base_symbols
             .as_ref()
             .map(|lib| lib.pin_layout_for(name))
             .unwrap_or_default();
+        let default_value = self
+            .base_symbols
+            .as_ref()
+            .map(|lib| lib.default_value_for(name))
+            .unwrap_or_else(|| crate::component_value::default_value_for_library_id(name));
         self.editor.place_request = Some(crate::editor::PlaceSymbolRequest {
             prefix: pre.to_string(),
             part_id: None,
             symbol_id: Some(label),
             pin_layout,
+            default_value,
         });
         self.editor.tool = CanvasTool::PlaceSymbol;
         self.log_console(format!("Place {name} on canvas."));
     }
 }
 
-/// Click row to place; returns true when activated.
+/// Row with a real **Place** button; click the row or the button to arm placement.
 fn place_list_row(
     ui: &mut egui::Ui,
     tokens: &crate::ui::tokens::UiTokens,
     body: impl FnOnce(&mut egui::Ui),
 ) -> bool {
+    let row_id = ui.auto_id_with("place_list_row");
     let mut place = false;
     let frame = egui::Frame::none()
         .fill(tokens.bg_elevated)
@@ -487,30 +532,79 @@ fn place_list_row(
         ui.horizontal(|ui| {
             body(ui);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new("Place")
-                        .small()
-                        .color(tokens.text_muted),
-                );
+                if crate::ui::widgets::secondary_button(ui, tokens, "Place").clicked() {
+                    place = true;
+                }
             });
         });
     });
-    let r = inner.response;
-    let row_rect = r.rect;
-    if r.clicked() || r.double_clicked() {
+    let row_rect = inner.response.rect;
+    let row_resp = ui.interact(row_rect, row_id, egui::Sense::click());
+    if row_resp.clicked() || row_resp.double_clicked() {
         place = true;
     }
-    if r.hovered() {
+    if row_resp.hovered() || inner.response.hovered() {
         ui.painter().rect_stroke(
             row_rect,
             tokens.radius_sm,
             egui::Stroke::new(1.0, tokens.accent),
         );
+        row_resp.on_hover_text("Place on canvas (click row or Place, then click schematic)");
     }
     place
 }
 
 fn paint_preview_symbol(
+    ui: &egui::Ui,
+    lib: Option<&crate::base_symbols::BaseSymbolLibrary>,
+    rect: egui::Rect,
+    library_id_or_kind: Option<&str>,
+) {
+    let tokens = crate::ui::tokens::UiTokens::default();
+    ui.painter().rect_filled(rect, 3.0, tokens.preview_bg);
+    ui.painter()
+        .rect_stroke(rect.shrink(0.5), 3.0, tokens.stroke_subtle);
+    let ink = tokens.sym_ink;
+    let spec = |kind: CompKind| {
+        crate::base_symbols::SymbolPaintSpec::new(
+            rect.center(),
+            rect.width() * 0.35,
+            rect.height() * 0.35,
+            0.0,
+            kind,
+            ink,
+            1.35,
+            tokens.sym_outline,
+        )
+    };
+    if let (Some(lib), Some(id)) = (lib, library_id_or_kind) {
+        if lib.contains(id) {
+            let kind = crate::symbols_draw::kind_from_refdes(
+                &crate::base_symbols::BaseSymbolLibrary::refdes_prefix_for_library_id(id),
+            );
+            lib.paint_named_or_fallback(ui.painter(), spec(kind), id);
+            return;
+        }
+        let short = id.rsplit(':').next().unwrap_or(id);
+        let kind = crate::symbols_draw::kind_from_refdes(short);
+        lib.paint_kind_or_fallback(ui.painter(), spec(kind));
+    } else if let Some(id) = library_id_or_kind {
+        let short = id.rsplit(':').next().unwrap_or(id);
+        let kind = crate::symbols_draw::kind_from_refdes(short);
+        crate::symbols_draw::paint_symbol_body(
+            ui.painter(),
+            rect.center(),
+            rect.width() * 0.35,
+            rect.height() * 0.35,
+            0.0,
+            kind,
+            ink,
+            1.2,
+        );
+    }
+}
+
+fn paint_preview_primitive(
     ui: &egui::Ui,
     lib: Option<&crate::base_symbols::BaseSymbolLibrary>,
     rect: egui::Rect,
@@ -520,21 +614,18 @@ fn paint_preview_symbol(
     ui.painter().rect_filled(rect, 3.0, tokens.preview_bg);
     ui.painter()
         .rect_stroke(rect.shrink(0.5), 3.0, tokens.stroke_subtle);
-    let ink = tokens.sym_ink;
+    let spec = crate::base_symbols::SymbolPaintSpec::new(
+        rect.center(),
+        rect.width() * 0.35,
+        rect.height() * 0.35,
+        0.0,
+        kind,
+        tokens.sym_ink,
+        1.35,
+        tokens.sym_outline,
+    );
     if let Some(lib) = lib {
-        lib.paint_kind_or_fallback(
-            ui.painter(),
-            crate::base_symbols::SymbolPaintSpec::new(
-                rect.center(),
-                rect.width() * 0.35,
-                rect.height() * 0.35,
-                0.0,
-                kind,
-                ink,
-                1.35,
-                tokens.sym_outline,
-            ),
-        );
+        lib.paint_kind_or_fallback(ui.painter(), spec);
     } else {
         crate::symbols_draw::paint_symbol_body(
             ui.painter(),
@@ -543,7 +634,7 @@ fn paint_preview_symbol(
             rect.height() * 0.35,
             0.0,
             kind,
-            ink,
+            tokens.sym_ink,
             1.2,
         );
     }

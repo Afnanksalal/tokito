@@ -3,4 +3,4 @@
 mod lib_file;
 mod sexpr;
 
-pub use lib_file::{Symbol, SymbolGraphic, SymbolLibFile};
+pub use lib_file::{Symbol, SymbolGraphic, SymbolLibFile, SymbolPin, SymbolProperty};
