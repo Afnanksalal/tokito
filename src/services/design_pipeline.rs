@@ -5,10 +5,9 @@ use crate::models::{
     BomLineInput, CreateManufacturer, CreatePart, ErcViolation, ReplaceBom, ReplaceSchematic,
 };
 use crate::router::AppState;
+use crate::services::llm;
 use crate::services::research_pipeline;
 use crate::services::schematic_gen::{extract_llm_json_object, suggest_from_prompt};
-use crate::services::xai;
-use crate::store::account;
 use crate::store::{bom, designs, intent, manufacturers, parts, research};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -116,7 +115,6 @@ async fn llm_plan(
     design_id: Uuid,
     user_prompt: &str,
 ) -> AppResult<PlanPhase> {
-    account::ensure_llm_quota(pool, user_id, 24_000).await?;
     let design = designs::get(pool, design_id).await?;
     let user_payload = json!({
         "design_name": design.name,
@@ -147,14 +145,12 @@ Rules:
         "temperature": 0.25,
     });
 
-    let resp = xai::chat_completion(state, body).await?;
-    let (pt, ct) = xai::usage_tokens(&resp);
-    account::record_llm_usage(pool, user_id, pt, ct).await?;
+    let resp = llm::metered_chat_completion(state, pool, user_id, body, 24_000).await?;
 
     let content = resp
         .pointer("/choices/0/message/content")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Upstream("xAI missing message content (plan)".into()))?;
+        .ok_or_else(|| AppError::Upstream("AI response missing message content (plan)".into()))?;
 
     let raw = extract_llm_json_object(content)?;
     serde_json::from_str::<PlanPhase>(&raw)
@@ -188,8 +184,6 @@ async fn llm_resolve_parts(
     user_prompt: &str,
     plan: &PlanPhase,
 ) -> AppResult<Vec<ResolvedPart>> {
-    account::ensure_llm_quota(pool, user_id, 48_000).await?;
-
     let artifacts = research::list_for_design(pool, design_id, 48).await?;
     let mpn_hints: Vec<&str> = plan
         .candidate_parts
@@ -240,14 +234,14 @@ Rules:
         "temperature": 0.2,
     });
 
-    let resp = xai::chat_completion(state, body).await?;
-    let (pt, ct) = xai::usage_tokens(&resp);
-    account::record_llm_usage(pool, user_id, pt, ct).await?;
+    let resp = llm::metered_chat_completion(state, pool, user_id, body, 48_000).await?;
 
     let content = resp
         .pointer("/choices/0/message/content")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Upstream("xAI missing message content (resolve)".into()))?;
+        .ok_or_else(|| {
+            AppError::Upstream("AI response missing message content (resolve)".into())
+        })?;
 
     let raw = extract_llm_json_object(content)?;
     let parsed: ResolvePhase = serde_json::from_str(&raw)
@@ -353,19 +347,16 @@ pub async fn build_design_from_prompt(
     cancel: Option<Arc<AtomicBool>>,
 ) -> AppResult<BuildPipelineOutcome> {
     check_cancel(cancel.as_ref())?;
-    if state.xai.is_none() {
+    if state.llm.is_none() {
         return Err(AppError::Unavailable(
-            crate::user_messages::XAI_NOT_CONFIGURED.into(),
+            "AI provider is not configured".into(),
         ));
     }
     if state.firecrawl.is_none() {
-        return Err(AppError::Unavailable(
-            format!(
-                "{} (required for datasheet search)",
-                crate::user_messages::FIRECRAWL_NOT_CONFIGURED
-            )
-            .into(),
-        ));
+        return Err(AppError::Unavailable(format!(
+            "{} (required for datasheet search)",
+            crate::user_messages::FIRECRAWL_NOT_CONFIGURED
+        )));
     }
 
     let prompt = user_prompt.trim();
@@ -399,9 +390,7 @@ pub async fn build_design_from_prompt(
     let mut warnings = Vec::new();
     let mut pages_ingested = 0usize;
     for q in &queries {
-        if incremental_research
-            && research::has_search_for_query(pool, design_id, q).await?
-        {
+        if incremental_research && research::has_search_for_query(pool, design_id, q).await? {
             warnings.push(format!("Skipped Firecrawl (cached): {q}"));
             continue;
         }
@@ -428,9 +417,7 @@ pub async fn build_design_from_prompt(
                 "Firecrawl returned no pages and the plan had no candidate parts — refine the prompt or check API keys.".into(),
             ));
         }
-        warnings.push(
-            "No new research pages; BOM built from planner candidate parts only.".into(),
-        );
+        warnings.push("No new research pages; BOM built from planner candidate parts only.".into());
         resolve_from_candidates(&plan)
     } else {
         match llm_resolve_parts(state, pool, user_id, design_id, prompt, &plan).await {
@@ -440,7 +427,9 @@ pub async fn build_design_from_prompt(
                 resolve_from_candidates(&plan)
             }
             Err(e) => {
-                warnings.push(format!("Part resolve failed ({e}); using planner candidates."));
+                warnings.push(format!(
+                    "Part resolve failed ({e}); using planner candidates."
+                ));
                 resolve_from_candidates(&plan)
             }
         }
@@ -449,7 +438,8 @@ pub async fn build_design_from_prompt(
     upsert_bom_from_resolved(pool, design_id, &resolved).await?;
     check_cancel(cancel.as_ref())?;
 
-    let (schematic, erc) = suggest_from_prompt(state, pool, user_id, design_id, prompt, true).await?;
+    let (schematic, erc) =
+        suggest_from_prompt(state, pool, user_id, design_id, prompt, true).await?;
     check_cancel(cancel.as_ref())?;
     Ok(BuildPipelineOutcome {
         schematic,
@@ -491,7 +481,12 @@ pub async fn run_research_for_plan(
             continue;
         }
         match research_pipeline::search_web_into_design(
-            state, pool, user_id, design_id, q, Some(FIRECRAWL_LIMIT),
+            state,
+            pool,
+            user_id,
+            design_id,
+            q,
+            Some(FIRECRAWL_LIMIT),
         )
         .await
         {
@@ -543,17 +538,14 @@ pub async fn suggest_schematic_stage(
 }
 
 /// Compare DB BOM vs schematic rollup (agent tool `reconcile_bom`).
-pub async fn reconcile_bom(
-    pool: &PgPool,
-    design_id: Uuid,
-) -> AppResult<serde_json::Value> {
+pub async fn reconcile_bom(pool: &PgPool, design_id: Uuid) -> AppResult<serde_json::Value> {
     let lines = bom::list_for_design(pool, design_id).await?;
     let doc = crate::store::schematic_document::get(pool, design_id)
         .await?
         .unwrap_or_else(crate::models::SchematicDocument::empty);
     let (body, _) = doc.to_replace_schematic();
     let summary = crate::services::bom_sync::diff_summary(&lines, &body);
-    Ok(serde_json::to_value(summary).map_err(|e| AppError::Any(e.into()))?)
+    serde_json::to_value(summary).map_err(|e| AppError::Any(e.into()))
 }
 
 #[cfg(test)]

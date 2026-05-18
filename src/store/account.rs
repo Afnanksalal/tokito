@@ -52,6 +52,44 @@ pub async fn find_user_by_email(pool: &PgPool, email: &str) -> AppResult<Option<
     Ok(row)
 }
 
+pub async fn find_user_by_id(pool: &PgPool, user_id: Uuid) -> AppResult<Option<UserRow>> {
+    let row = sqlx::query_as::<_, UserRow>(
+        r#"
+        SELECT id, email, password_hash, quota_llm_tokens_monthly, quota_scrapes_daily
+        FROM users
+        WHERE id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+pub async fn upsert_user_seed(pool: &PgPool, user: &UserRow) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO users (
+          id, email, password_hash, quota_llm_tokens_monthly, quota_scrapes_daily
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (id) DO UPDATE SET
+          email = EXCLUDED.email,
+          password_hash = EXCLUDED.password_hash,
+          quota_llm_tokens_monthly = EXCLUDED.quota_llm_tokens_monthly,
+          quota_scrapes_daily = EXCLUDED.quota_scrapes_daily
+        "#,
+    )
+    .bind(user.id)
+    .bind(&user.email)
+    .bind(&user.password_hash)
+    .bind(user.quota_llm_tokens_monthly)
+    .bind(user.quota_scrapes_daily)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn resolve_api_key(pool: &PgPool, key_hash: &str) -> AppResult<AuthUser> {
     let row: Option<(Uuid, String)> = sqlx::query_as(
         r#"
@@ -171,6 +209,119 @@ pub async fn ensure_llm_quota(pool: &PgPool, user_id: Uuid, planned_extra: i64) 
     Ok(())
 }
 
+pub async fn reserve_llm_tokens(
+    pool: &PgPool,
+    user_id: Uuid,
+    planned_extra: i64,
+) -> AppResult<i64> {
+    if planned_extra <= 0 {
+        return Ok(0);
+    }
+    let today = Utc::now().date_naive();
+    let month_start = NaiveDate::from_ymd_opt(Utc::now().year(), Utc::now().month(), 1)
+        .unwrap_or_else(|| Utc::now().date_naive());
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(user_id.to_string())
+        .execute(&mut *tx)
+        .await?;
+    let quota: (i64,) =
+        sqlx::query_as(r#"SELECT quota_llm_tokens_monthly FROM users WHERE id = $1"#)
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or_else(|| AppError::Unauthorized("user not found".into()))?;
+    let used: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COALESCE(SUM(llm_prompt_tokens + llm_completion_tokens), 0)::bigint
+        FROM usage_daily
+        WHERE user_id = $1 AND day >= $2
+        "#,
+    )
+    .bind(user_id)
+    .bind(month_start)
+    .fetch_one(&mut *tx)
+    .await?;
+    if used.0 + planned_extra > quota.0 {
+        return Err(AppError::Forbidden(format!(
+            "LLM token quota exceeded ({}/{})",
+            used.0, quota.0
+        )));
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO usage_daily (user_id, day, llm_prompt_tokens, llm_completion_tokens, scrapes)
+        VALUES ($1, $2, $3, 0, 0)
+        ON CONFLICT (user_id, day) DO UPDATE SET
+          llm_prompt_tokens = usage_daily.llm_prompt_tokens + EXCLUDED.llm_prompt_tokens
+        "#,
+    )
+    .bind(user_id)
+    .bind(today)
+    .bind(planned_extra)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(planned_extra)
+}
+
+pub async fn refund_llm_reservation(
+    pool: &PgPool,
+    user_id: Uuid,
+    reserved_tokens: i64,
+) -> AppResult<()> {
+    if reserved_tokens <= 0 {
+        return Ok(());
+    }
+    let today = Utc::now().date_naive();
+    sqlx::query(
+        r#"
+        UPDATE usage_daily
+        SET llm_prompt_tokens = GREATEST(llm_prompt_tokens - $3, 0)
+        WHERE user_id = $1 AND day = $2
+        "#,
+    )
+    .bind(user_id)
+    .bind(today)
+    .bind(reserved_tokens)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn reconcile_llm_reservation(
+    pool: &PgPool,
+    user_id: Uuid,
+    reserved_tokens: i64,
+    prompt_tokens: i64,
+    completion_tokens: i64,
+) -> AppResult<()> {
+    if reserved_tokens <= 0 {
+        return record_llm_usage(pool, user_id, prompt_tokens, completion_tokens).await;
+    }
+    if prompt_tokens + completion_tokens <= 0 {
+        return Ok(());
+    }
+    let today = Utc::now().date_naive();
+    sqlx::query(
+        r#"
+        UPDATE usage_daily
+        SET
+          llm_prompt_tokens = GREATEST(llm_prompt_tokens - $3, 0) + $4,
+          llm_completion_tokens = llm_completion_tokens + $5
+        WHERE user_id = $1 AND day = $2
+        "#,
+    )
+    .bind(user_id)
+    .bind(today)
+    .bind(reserved_tokens)
+    .bind(prompt_tokens.max(0))
+    .bind(completion_tokens.max(0))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn ensure_scrape_quota(pool: &PgPool, user_id: Uuid) -> AppResult<()> {
     let u: (i32,) = sqlx::query_as(r#"SELECT quota_scrapes_daily FROM users WHERE id = $1"#)
         .bind(user_id)
@@ -184,6 +335,81 @@ pub async fn ensure_scrape_quota(pool: &PgPool, user_id: Uuid) -> AppResult<()> 
             used, u.0
         )));
     }
+    Ok(())
+}
+
+pub async fn reserve_scrapes(pool: &PgPool, user_id: Uuid, count: i32) -> AppResult<()> {
+    if count <= 0 {
+        return Ok(());
+    }
+    let today = Utc::now().date_naive();
+    let mut tx = pool.begin().await?;
+    let quota: (i32,) = sqlx::query_as(r#"SELECT quota_scrapes_daily FROM users WHERE id = $1"#)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| AppError::Unauthorized("user not found".into()))?;
+    sqlx::query(
+        r#"
+        INSERT INTO usage_daily (user_id, day, llm_prompt_tokens, llm_completion_tokens, scrapes)
+        VALUES ($1, $2, 0, 0, 0)
+        ON CONFLICT (user_id, day) DO NOTHING
+        "#,
+    )
+    .bind(user_id)
+    .bind(today)
+    .execute(&mut *tx)
+    .await?;
+    let used: (i32,) = sqlx::query_as(
+        r#"
+        SELECT scrapes FROM usage_daily
+        WHERE user_id = $1 AND day = $2
+        FOR UPDATE
+        "#,
+    )
+    .bind(user_id)
+    .bind(today)
+    .fetch_one(&mut *tx)
+    .await?;
+    if used.0 + count > quota.0 {
+        return Err(AppError::Forbidden(format!(
+            "daily scrape quota exceeded ({}/{})",
+            used.0, quota.0
+        )));
+    }
+    sqlx::query(
+        r#"
+        UPDATE usage_daily
+        SET scrapes = scrapes + $3
+        WHERE user_id = $1 AND day = $2
+        "#,
+    )
+    .bind(user_id)
+    .bind(today)
+    .bind(count)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn refund_scrapes(pool: &PgPool, user_id: Uuid, count: i32) -> AppResult<()> {
+    if count <= 0 {
+        return Ok(());
+    }
+    let today = Utc::now().date_naive();
+    sqlx::query(
+        r#"
+        UPDATE usage_daily
+        SET scrapes = GREATEST(scrapes - $3, 0)
+        WHERE user_id = $1 AND day = $2
+        "#,
+    )
+    .bind(user_id)
+    .bind(today)
+    .bind(count)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

@@ -97,24 +97,6 @@ pub fn read(workspace: &Path) -> AppResult<ProjectToml> {
 }
 
 pub fn write(workspace: &Path, meta: &ProjectToml) -> AppResult<()> {
-    let body = format!(
-        r#"# Tokito project workspace
-id = "{id}"
-name = "{name}"
-slug = "{slug}"
-
-[database]
-mode = "{mode}"
-
-[exports]
-default_format = "{fmt}"
-"#,
-        id = meta.id.map(|u| u.to_string()).unwrap_or_default(),
-        name = meta.name.replace('"', "\\\""),
-        slug = meta.slug,
-        mode = meta.database.mode,
-        fmt = meta.exports.default_format,
-    );
-    fs::write(crate::paths::project_toml_path(workspace), body)
-        .map_err(|e| AppError::Any(e.into()))
+    let body = toml::to_string_pretty(meta).map_err(|e| AppError::Any(e.into()))?;
+    fs::write(crate::paths::project_toml_path(workspace), body).map_err(|e| AppError::Any(e.into()))
 }

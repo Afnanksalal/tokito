@@ -10,20 +10,26 @@ fn norm(s: &str) -> String {
         .collect()
 }
 
+fn normalized_tokens(s: &str) -> Vec<String> {
+    s.split_whitespace()
+        .map(norm)
+        .filter(|t| t.len() >= 3)
+        .collect()
+}
+
 /// Score artifacts for relevance to prompt + optional MPN hints.
 pub fn rank_artifacts<'a>(
     artifacts: &'a [DesignResearchArtifact],
     prompt: &str,
     mpns: &[&str],
 ) -> Vec<&'a DesignResearchArtifact> {
-    let prompt_n = norm(prompt);
+    let prompt_tokens = normalized_tokens(prompt);
     let mpn_n: Vec<String> = mpns.iter().map(|m| norm(m)).collect();
     let mut scored: Vec<(&DesignResearchArtifact, i32)> = artifacts
         .iter()
         .map(|a| {
             let mut score = 0i32;
-            if a
-                .metadata_json
+            if a.metadata_json
                 .get("pinned")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false)
@@ -32,7 +38,7 @@ pub fn rank_artifacts<'a>(
             }
             let body_n = norm(&a.content_text);
             let title_n = a.title.as_deref().map(norm).unwrap_or_default();
-            for token in prompt_n.split_whitespace().filter(|t| t.len() >= 3) {
+            for token in &prompt_tokens {
                 if body_n.contains(token) || title_n.contains(token) {
                     score += 2;
                 }
@@ -48,7 +54,10 @@ pub fn rank_artifacts<'a>(
             (a, score)
         })
         .collect();
-    scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.created_at.cmp(&a.0.created_at)));
+    scored.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| b.0.created_at.cmp(&a.0.created_at))
+    });
     scored.into_iter().map(|(a, _)| a).collect()
 }
 

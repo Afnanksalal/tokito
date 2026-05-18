@@ -1,7 +1,7 @@
 //! Reusable widgets: buttons and CAD toolbar icon controls.
 
 use crate::ui::tokens::UiTokens;
-use egui::{Pos2, Rect, RichText, Stroke, Ui, Vec2, Widget};
+use egui::{Pos2, Rect, RichText, Stroke, Ui, Vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
@@ -23,10 +23,29 @@ pub enum ToolIcon {
 
 pub fn primary_button(ui: &mut Ui, tokens: &UiTokens, label: impl Into<String>) -> egui::Response {
     let label = label.into();
+    let width = fitted_button_width(ui, &label, 112.0, 220.0);
     ui.add_sized(
-        [ui.available_width(), 36.0],
+        [width, 36.0],
         egui::Button::new(RichText::new(label).strong().color(egui::Color32::WHITE))
             .fill(tokens.accent),
+    )
+}
+
+pub fn primary_button_full(
+    ui: &mut Ui,
+    tokens: &UiTokens,
+    label: impl Into<String>,
+) -> egui::Response {
+    let available = ui.available_width().max(0.0);
+    let width = available.min(360.0).max(available.min(112.0));
+    ui.add_sized(
+        [width, 38.0],
+        egui::Button::new(
+            RichText::new(label.into())
+                .strong()
+                .color(egui::Color32::WHITE),
+        )
+        .fill(tokens.accent),
     )
 }
 
@@ -35,10 +54,14 @@ pub fn secondary_button(
     tokens: &UiTokens,
     label: impl Into<String>,
 ) -> egui::Response {
-    egui::Button::new(RichText::new(label.into()).color(tokens.text_primary))
-        .fill(tokens.bg_elevated)
-        .stroke(tokens.stroke_subtle)
-        .ui(ui)
+    let label = label.into();
+    let width = fitted_button_width(ui, &label, 96.0, 220.0);
+    ui.add_sized(
+        [width, 34.0],
+        egui::Button::new(RichText::new(label).color(tokens.text_primary))
+            .fill(tokens.bg_elevated)
+            .stroke(tokens.stroke_subtle),
+    )
 }
 
 pub fn cad_tool_button(
@@ -48,7 +71,7 @@ pub fn cad_tool_button(
     selected: bool,
     tooltip: &str,
 ) -> bool {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(34.0, 32.0), egui::Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(38.0, 36.0), egui::Sense::click());
     let fill = if selected {
         tokens.bg_chip_selected
     } else if response.hovered() {
@@ -61,8 +84,8 @@ pub fn cad_tool_button(
     } else {
         tokens.stroke_subtle
     };
-    ui.painter().rect_filled(rect, 4.0, fill);
-    ui.painter().rect_stroke(rect.shrink(0.5), 4.0, stroke);
+    ui.painter().rect_filled(rect, 7.0, fill);
+    ui.painter().rect_stroke(rect.shrink(0.5), 7.0, stroke);
 
     let ink = if selected {
         tokens.text_primary
@@ -71,6 +94,17 @@ pub fn cad_tool_button(
     };
     paint_tool_icon(ui.painter(), rect, icon, ink);
     response.on_hover_text(tooltip).clicked()
+}
+
+fn fitted_button_width(ui: &Ui, label: &str, min: f32, max: f32) -> f32 {
+    let available = ui.available_width().max(0.0);
+    let estimated = label.chars().count() as f32 * 7.2 + 34.0;
+    let desired = estimated.clamp(min, max);
+    if available < min {
+        available
+    } else {
+        desired.min(available)
+    }
 }
 
 pub fn toolbar_icon_btn(ui: &mut Ui, tokens: &UiTokens, tooltip: &str, icon: ToolIcon) -> bool {

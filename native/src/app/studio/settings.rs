@@ -3,6 +3,7 @@
 use crate::app::studio::chrome::TabChrome;
 use crate::app::App;
 use crate::theme;
+use tokito::config::AiProvider;
 use tokito::router::AppState;
 
 impl App {
@@ -12,7 +13,7 @@ impl App {
         chrome.header(
             ui,
             "Settings",
-            Some("Stored in your app data folder"),
+            Some("App, database, catalog, and provider keys"),
         );
 
         crate::ui::layout::content_card(ui, chrome.tokens, |ui| {
@@ -45,15 +46,11 @@ impl App {
                         }
                     });
             });
-            ui.label(
-                egui::RichText::new(
-                    "Built-in: OS keychain for API keys · Firecrawl incremental build · \
-                     ERC strict · bus tool · LCSC catalog · auto-add parts to BOM · \
-                     open/reveal after export",
-                )
-                .small()
-                .weak(),
-            );
+            ui.horizontal_wrapped(|ui| {
+                for label in ["Keychain", "Strict ERC", "Bus tool", "LCSC", "Auto BOM"] {
+                    crate::ui::layout::filter_chip(ui, chrome.tokens, label, true);
+                }
+            });
         });
 
         ui.add_space(8.0);
@@ -67,7 +64,7 @@ impl App {
             };
             ui.label(
                 egui::RichText::new(format!(
-                    "Status: {status} · Data: {}",
+                    "Status: {status} | Data: {}",
                     tokito::settings::postgres_data_dir(&self.settings_file).display()
                 ))
                 .small()
@@ -89,11 +86,13 @@ impl App {
             });
             ui.label("Custom data directory (empty = default):");
             ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.settings_file.database.data_dir);
-                if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Browse…").clicked() {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.settings_file.database.data_dir)
+                        .desired_width(360.0),
+                );
+                if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Browse").clicked() {
                     if let Some(dir) = rfd::FileDialog::new().pick_folder() {
-                        self.settings_file.database.data_dir =
-                            dir.to_string_lossy().into_owned();
+                        self.settings_file.database.data_dir = dir.to_string_lossy().into_owned();
                     }
                 }
             });
@@ -101,9 +100,7 @@ impl App {
                 if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Test connection")
                     .clicked()
                 {
-                    let st = self
-                        .rt
-                        .block_on(tokito::db::test_connection(&self.pool));
+                    let st = self.rt.block_on(tokito::db::test_connection(&self.pool));
                     self.db_status = st;
                     let label = match st {
                         tokito::db::DatabaseStatus::Ready => "connected",
@@ -122,7 +119,7 @@ impl App {
                 {
                     let dir = tokito::settings::postgres_data_dir(&self.settings_file);
                     match tokito::db::repair_cluster_dir(&dir) {
-                        Ok(()) => self.toast_ok("Database cluster reset — restart Tokito"),
+                        Ok(()) => self.toast_ok("Database cluster reset; restart Tokito"),
                         Err(e) => self.set_err(e.to_string()),
                     }
                 }
@@ -139,23 +136,67 @@ impl App {
         ui.add_space(8.0);
         crate::ui::layout::content_card(ui, chrome.tokens, |ui| {
             ui.label(egui::RichText::new("AI (Build & Agent)").strong());
-            ui.label("xAI API key:");
+            ui.horizontal(|ui| {
+                ui.label("Provider:");
+                egui::ComboBox::from_id_salt("settings_ai_provider")
+                    .selected_text(provider_label(&self.settings_file.ai.provider))
+                    .width(180.0)
+                    .show_ui(ui, |ui| {
+                        for (id, label) in [
+                            ("xai", "xAI"),
+                            ("openai", "OpenAI"),
+                            ("anthropic", "Claude"),
+                            ("gemini", "Gemini"),
+                            ("kimi", "Kimi"),
+                        ] {
+                            if ui
+                                .selectable_value(
+                                    &mut self.settings_file.ai.provider,
+                                    id.to_string(),
+                                    label,
+                                )
+                                .clicked()
+                            {
+                                let provider = AiProvider::parse(id);
+                                self.settings_file.ai.llm_base_url =
+                                    provider.default_base_url().to_string();
+                                self.settings_file.ai.agent_model =
+                                    provider.default_model().to_string();
+                            }
+                        }
+                    });
+            });
+            ui.label("API key:");
             ui.add(
-                egui::TextEdit::singleline(&mut self.settings_file.ai.xai_api_key)
+                egui::TextEdit::singleline(&mut self.settings_file.ai.llm_api_key)
                     .password(true)
-                    .hint_text("Required for Build"),
+                    .desired_width(420.0)
+                    .hint_text("Required for Build and Agent"),
+            );
+            ui.label("Provider base URL:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.settings_file.ai.llm_base_url)
+                    .desired_width(420.0)
+                    .hint_text("Leave as provider default unless using a proxy"),
             );
             ui.label("Firecrawl API key:");
             ui.add(
                 egui::TextEdit::singleline(&mut self.settings_file.ai.firecrawl_api_key)
                     .password(true)
+                    .desired_width(420.0)
                     .hint_text("Required for research"),
             );
             ui.label("Model:");
-            ui.text_edit_singleline(&mut self.settings_file.ai.agent_model);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.settings_file.ai.agent_model)
+                    .desired_width(260.0),
+            );
             ui.horizontal(|ui| {
                 ui.label("Max iterations:");
-                ui.add(egui::DragValue::new(&mut self.settings_file.ai.agent_max_iterations).range(1..=32));
+                ui.add(
+                    egui::DragValue::new(&mut self.settings_file.ai.agent_max_iterations)
+                        .range(1..=32),
+                );
                 ui.label("Token budget:");
                 ui.add(
                     egui::DragValue::new(&mut self.settings_file.ai.agent_max_llm_tokens)
@@ -173,21 +214,29 @@ impl App {
                     .weak(),
             );
             ui.label("Nexar client ID (richer catalog metadata):");
-            ui.text_edit_singleline(&mut self.settings_file.catalog.nexar_client_id);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.settings_file.catalog.nexar_client_id)
+                    .desired_width(360.0),
+            );
             ui.label("Nexar client secret:");
             ui.add(
                 egui::TextEdit::singleline(&mut self.settings_file.catalog.nexar_client_secret)
-                    .password(true),
+                    .password(true)
+                    .desired_width(360.0),
             );
         });
 
         ui.collapsing("Advanced (HTTP server)", |ui| {
             ui.label("HTTP addr:");
-            ui.text_edit_singleline(&mut self.settings_file.server.http_addr);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.settings_file.server.http_addr)
+                    .desired_width(240.0),
+            );
             ui.label("JWT secret:");
             ui.add(
                 egui::TextEdit::singleline(&mut self.settings_file.server.jwt_secret)
-                    .password(true),
+                    .password(true)
+                    .desired_width(360.0),
             );
         });
 
@@ -196,8 +245,7 @@ impl App {
             if crate::ui::widgets::primary_button(ui, chrome.tokens, "Save settings").clicked() {
                 self.save_settings(ctx);
             }
-            if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Reset defaults").clicked()
-            {
+            if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Reset defaults").clicked() {
                 self.settings_file = tokito::settings::SettingsFile::default();
             }
             if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Export redacted").clicked()
@@ -221,7 +269,7 @@ impl App {
         });
         ui.label(
             egui::RichText::new(format!(
-                "File: {} · process env fills empty keys only (CI)",
+                "File: {} | process env fills empty keys only (CI)",
                 tokito::paths::settings_path().display()
             ))
             .small()
@@ -235,7 +283,7 @@ impl App {
         match tokito::settings::save_file(&self.settings_file) {
             Ok(()) => {
                 if let Ok(cfg) = self.settings_file.to_config() {
-                    self.ai_build_ready = cfg.xai.is_some() && cfg.firecrawl.is_some();
+                    self.ai_build_ready = cfg.llm.is_some() && cfg.firecrawl.is_some();
                     if let Ok(st) = AppState::try_new(self.pool.clone(), &cfg) {
                         self.state = st;
                     }
@@ -244,12 +292,22 @@ impl App {
                 theme::apply_with_theme(ctx, &eff);
                 self.ui_tokens = theme::tokens_for(&self.settings_file.general.theme);
                 self.log_console(
-                    "Settings saved — theme applies immediately; API keys reload for Build/Agent.",
+                    "Settings saved; theme applies immediately and API keys reload for Build/Agent.",
                 );
                 self.toast_ok("Settings saved");
                 self.err = None;
             }
             Err(e) => self.set_err(e.to_string()),
         }
+    }
+}
+
+fn provider_label(value: &str) -> &'static str {
+    match AiProvider::parse(value) {
+        AiProvider::OpenAi => "OpenAI",
+        AiProvider::Anthropic => "Claude",
+        AiProvider::Gemini => "Gemini",
+        AiProvider::Xai => "xAI",
+        AiProvider::Kimi => "Kimi",
     }
 }

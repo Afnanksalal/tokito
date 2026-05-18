@@ -23,10 +23,7 @@ async fn postgres_data_survives_sequential_start() -> anyhow::Result<()> {
     if !enabled() {
         return Ok(());
     }
-    let dir = std::env::temp_dir().join(format!(
-        "tokito_pg_seq_{}",
-        uuid::Uuid::new_v4().simple()
-    ));
+    let dir = std::env::temp_dir().join(format!("tokito_pg_seq_{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&dir)?;
     let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
 
@@ -44,11 +41,10 @@ async fn postgres_data_survives_sequential_start() -> anyhow::Result<()> {
 
     let _pg2 = EmbeddedPostgres::start(&dir, port, 16).await?;
     let pool2 = pool_for(&_pg2.database_url()).await?;
-    let row: Option<(uuid::Uuid,)> =
-        sqlx::query_as("SELECT id FROM designs WHERE id = $1")
-            .bind(marker)
-            .fetch_optional(&pool2)
-            .await?;
+    let row: Option<(uuid::Uuid,)> = sqlx::query_as("SELECT id FROM designs WHERE id = $1")
+        .bind(marker)
+        .fetch_optional(&pool2)
+        .await?;
     assert!(row.is_some());
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
@@ -59,10 +55,8 @@ async fn port_conflict_does_not_wipe_cluster() -> anyhow::Result<()> {
     if !enabled() {
         return Ok(());
     }
-    let dir = std::env::temp_dir().join(format!(
-        "tokito_pg_port_{}",
-        uuid::Uuid::new_v4().simple()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("tokito_pg_port_{}", uuid::Uuid::new_v4().simple()));
     let port = TcpListener::bind("127.0.0.1:0")?.local_addr()?.port();
 
     let mut pg = EmbeddedPostgres::start(&dir, port, 16).await?;

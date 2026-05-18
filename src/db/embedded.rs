@@ -6,14 +6,19 @@ use pg_embed::pg_enums::PgAuthMethod;
 use pg_embed::pg_errors::Error as PgEmbedError;
 use pg_embed::postgres::{PgEmbed, PgSettings};
 
+#[cfg(windows)]
+use crate::db::pg_embed_util::required_pg_tool;
 use crate::db::pg_embed_util::{pg_executables_ready, pg_fetch_settings};
 use std::path::Path;
+#[cfg(windows)]
+use std::process::Stdio;
 use std::time::Duration;
 
 const DB_NAME: &str = "tokito";
 const USER: &str = "tokito";
 const PASSWORD: &str = "tokito";
 const PG_VERSION_FILE: &str = "PG_VERSION";
+const CLUSTER_SENTINEL_FILE: &str = ".tokito-postgres-cluster";
 const START_ATTEMPTS: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,11 +33,12 @@ enum StartFailureKind {
 
 pub struct EmbeddedPostgres {
     pg: PgEmbed,
+    direct_postgres: Option<tokio::process::Child>,
 }
 
 impl EmbeddedPostgres {
     pub async fn start(data_dir: &Path, port: u16, pg_version: u16) -> anyhow::Result<Self> {
-        prepare_cluster_dir(data_dir, pg_version)?;
+        let mark_managed_after_setup = prepare_cluster_dir(data_dir, pg_version)?;
 
         let mut last_err: Option<anyhow::Error> = None;
 
@@ -43,12 +49,11 @@ impl EmbeddedPostgres {
                     tracing::warn!(%purge_err, "pg-embed cache purge failed");
                 }
                 last_err = Some(e);
-                tokio::time::sleep(Duration::from_millis(500 * (attempt as u64 + 1)))
-                    .await;
+                tokio::time::sleep(Duration::from_millis(500 * (attempt as u64 + 1))).await;
                 continue;
             }
 
-            match try_start(data_dir, port, pg_version).await {
+            match try_start(data_dir, port, pg_version, mark_managed_after_setup).await {
                 Ok(pg) => return Ok(pg),
                 Err(e) => {
                     let kind = classify_start_error(&e, data_dir, pg_version);
@@ -69,6 +74,9 @@ impl EmbeddedPostgres {
                                 attempt = attempt + 1,
                                 "postgres data dir unusable — resetting cluster",
                             );
+                            if mark_managed_after_setup {
+                                mark_managed_cluster(data_dir)?;
+                            }
                             reset_cluster_dir(data_dir)?;
                         }
                         StartFailureKind::Transient => {
@@ -95,6 +103,12 @@ impl EmbeddedPostgres {
     }
 
     pub async fn graceful_stop(&mut self) {
+        if let Some(child) = self.direct_postgres.as_mut() {
+            self.pg.shutting_down = true;
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            return;
+        }
         let _ = self.pg.stop_db().await;
     }
 }
@@ -105,7 +119,10 @@ async fn ensure_pg_embed_binaries(data_dir: &Path, pg_version: u16) -> anyhow::R
     let access = PgAccess::new(&fetch, data_dir)
         .await
         .context("pg-embed access init")?;
-    if pg_executables_ready(&access).await.context("check pg binaries")? {
+    if pg_executables_ready(&access)
+        .await
+        .context("check pg binaries")?
+    {
         return Ok(());
     }
     tracing::info!(
@@ -119,7 +136,10 @@ async fn ensure_pg_embed_binaries(data_dir: &Path, pg_version: u16) -> anyhow::R
         .context("pg-embed binary download")?;
     crate::db::pg_embed_util::repair_windows_pg_embed_cache(&access.cache_dir)
         .context("repair pg-embed windows binary paths")?;
-    if !pg_executables_ready(&access).await.context("recheck pg binaries")? {
+    if !pg_executables_ready(&access)
+        .await
+        .context("recheck pg binaries")?
+    {
         anyhow::bail!(
             "pg-embed binaries missing after download (expected initdb under {}/bin)",
             access.cache_dir.display()
@@ -158,7 +178,9 @@ fn classify_start_error(
 fn is_pg_init_failure(err: &anyhow::Error) -> bool {
     err.chain()
         .any(|c| c.downcast_ref::<PgEmbedError>() == Some(&PgEmbedError::PgInitFailure))
-        || err.to_string().contains("PostgreSQL could not be initialized")
+        || err
+            .to_string()
+            .contains("PostgreSQL could not be initialized")
 }
 
 fn is_pg_start_failure(err: &anyhow::Error) -> bool {
@@ -183,10 +205,7 @@ fn cluster_needs_reset(data_dir: &Path, requested_version: u16) -> bool {
     if cluster_looks_corrupt(data_dir) {
         return true;
     }
-    match cluster_major_version(data_dir) {
-        Some(major) if major != requested_version => true,
-        _ => false,
-    }
+    matches!(cluster_major_version(data_dir), Some(major) if major != requested_version)
 }
 
 fn cluster_looks_corrupt(data_dir: &Path) -> bool {
@@ -232,11 +251,15 @@ fn should_purge_pg_embed_cache(err: &anyhow::Error) -> bool {
         || msg.contains("pg-embed binaries missing after download")
 }
 
-fn prepare_cluster_dir(data_dir: &Path, requested_version: u16) -> anyhow::Result<()> {
+fn prepare_cluster_dir(data_dir: &Path, requested_version: u16) -> anyhow::Result<bool> {
     if !data_dir.exists() {
         std::fs::create_dir_all(data_dir).context("create embedded data dir")?;
-        return Ok(());
+        return Ok(true);
     }
+    if is_empty_dir(data_dir)? {
+        return Ok(true);
+    }
+    let is_managed = data_dir.join(CLUSTER_SENTINEL_FILE).is_file();
     if cluster_needs_reset(data_dir, requested_version) {
         tracing::warn!(
             dir = %data_dir.display(),
@@ -245,17 +268,67 @@ fn prepare_cluster_dir(data_dir: &Path, requested_version: u16) -> anyhow::Resul
             "resetting postgres cluster (version mismatch or incomplete data)",
         );
         reset_cluster_dir(data_dir)?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(is_managed)
 }
 
 pub fn reset_cluster_dir(data_dir: &Path) -> anyhow::Result<()> {
+    ensure_managed_cluster_dir(data_dir)?;
     remove_pwfile(data_dir);
     if data_dir.exists() {
-        std::fs::remove_dir_all(data_dir).context("remove postgres data dir")?;
+        quarantine_cluster_dir(data_dir).context("quarantine postgres data dir")?;
     }
     std::fs::create_dir_all(data_dir).context("create embedded data dir")?;
     Ok(())
+}
+
+fn ensure_managed_cluster_dir(data_dir: &Path) -> anyhow::Result<()> {
+    if !data_dir.exists()
+        || is_empty_dir(data_dir)?
+        || data_dir.join(CLUSTER_SENTINEL_FILE).is_file()
+    {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "refusing to reset unmanaged PostgreSQL data directory {}; move it aside manually or use a Tokito-managed data directory",
+        data_dir.display()
+    );
+}
+
+fn mark_managed_cluster(data_dir: &Path) -> anyhow::Result<()> {
+    std::fs::write(
+        data_dir.join(CLUSTER_SENTINEL_FILE),
+        "Tokito embedded PostgreSQL data directory\n",
+    )
+    .context("write embedded data dir sentinel")
+}
+
+fn is_empty_dir(data_dir: &Path) -> anyhow::Result<bool> {
+    if !data_dir.exists() {
+        return Ok(true);
+    }
+    Ok(std::fs::read_dir(data_dir)
+        .context("read embedded data dir")?
+        .next()
+        .is_none())
+}
+
+fn quarantine_cluster_dir(data_dir: &Path) -> anyhow::Result<()> {
+    let parent = data_dir.parent().unwrap_or_else(|| Path::new("."));
+    let name = data_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("postgres");
+    let ts = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let mut candidate = parent.join(format!("{name}.quarantine-{ts}"));
+    let mut n = 1u32;
+    while candidate.exists() {
+        candidate = parent.join(format!("{name}.quarantine-{ts}-{n}"));
+        n += 1;
+    }
+    std::fs::rename(data_dir, &candidate)
+        .with_context(|| format!("move {} to {}", data_dir.display(), candidate.display()))
 }
 
 fn remove_pwfile(data_dir: &Path) {
@@ -264,7 +337,12 @@ fn remove_pwfile(data_dir: &Path) {
     let _ = std::fs::remove_file(pw);
 }
 
-async fn try_start(data_dir: &Path, port: u16, pg_version: u16) -> anyhow::Result<EmbeddedPostgres> {
+async fn try_start(
+    data_dir: &Path,
+    port: u16,
+    pg_version: u16,
+    mark_managed_after_setup: bool,
+) -> anyhow::Result<EmbeddedPostgres> {
     let settings = PgSettings {
         database_dir: data_dir.to_path_buf(),
         port,
@@ -284,10 +362,42 @@ async fn try_start(data_dir: &Path, port: u16, pg_version: u16) -> anyhow::Resul
         .await
         .context("pg-embed setup timed out")?
         .context("pg-embed setup")?;
-    tokio::time::timeout(Duration::from_secs(120), pg.start_db())
+    if mark_managed_after_setup {
+        mark_managed_cluster(data_dir)?;
+    }
+    let direct_postgres = match tokio::time::timeout(Duration::from_secs(120), pg.start_db())
         .await
         .context("embedded postgres start timed out")?
-        .context("start embedded postgres")?;
+    {
+        Ok(()) => None,
+        Err(start_err) => {
+            let pg_ctl_error = anyhow::Error::new(start_err).context("start embedded postgres");
+            #[cfg(windows)]
+            {
+                let pg_ctl_error_msg = pg_ctl_error.to_string();
+                if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+                    return Err(
+                        pg_ctl_error.context(format!("port {port} is unavailable on 127.0.0.1"))
+                    );
+                }
+                tracing::warn!(
+                    error = %pg_ctl_error_msg,
+                    "pg_ctl start failed; trying direct postgres start",
+                );
+                Some(
+                    start_postgres_direct(data_dir, port, pg_version)
+                        .await
+                        .with_context(|| {
+                            format!("direct postgres fallback failed after {pg_ctl_error_msg}")
+                        })?,
+                )
+            }
+            #[cfg(not(windows))]
+            {
+                return Err(pg_ctl_error);
+            }
+        }
+    };
 
     if !pg.database_exists(DB_NAME).await.context("check db")? {
         pg.create_database(DB_NAME)
@@ -295,7 +405,66 @@ async fn try_start(data_dir: &Path, port: u16, pg_version: u16) -> anyhow::Resul
             .context("create tokito database")?;
     }
 
-    Ok(EmbeddedPostgres { pg })
+    Ok(EmbeddedPostgres {
+        pg,
+        direct_postgres,
+    })
+}
+
+#[cfg(windows)]
+async fn start_postgres_direct(
+    data_dir: &Path,
+    port: u16,
+    pg_version: u16,
+) -> anyhow::Result<tokio::process::Child> {
+    let fetch = pg_fetch_settings(pg_version);
+    let access = PgAccess::new(&fetch, data_dir)
+        .await
+        .context("pg-embed access init for direct postgres")?;
+    let postgres_exe = required_pg_tool(&access.cache_dir.join("bin"), "postgres");
+    let mut child = tokio::process::Command::new(postgres_exe)
+        .arg("-D")
+        .arg(data_dir)
+        .arg("-p")
+        .arg(port.to_string())
+        .arg("-F")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .context("spawn postgres.exe")?;
+
+    let ready_url = format!("postgres://{USER}:{PASSWORD}@localhost:{port}/postgres");
+    wait_for_postgres_ready(&mut child, &ready_url, Duration::from_secs(30)).await?;
+    Ok(child)
+}
+
+#[cfg(windows)]
+async fn wait_for_postgres_ready(
+    child: &mut tokio::process::Child,
+    ready_url: &str,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if let Some(status) = child.try_wait().context("check postgres.exe status")? {
+            anyhow::bail!("postgres.exe exited before accepting connections: {status}");
+        }
+        if let Ok(Ok(pool)) = tokio::time::timeout(
+            Duration::from_millis(500),
+            sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .connect(ready_url),
+        )
+        .await
+        {
+            pool.close().await;
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let _ = child.start_kill();
+    anyhow::bail!("postgres.exe did not accept connections within {timeout:?}");
 }
 
 #[cfg(test)]
@@ -327,6 +496,19 @@ mod tests {
             StartFailureKind::CacheOrDownload
         );
         assert!(dir.join(PG_VERSION_FILE).is_file());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prepare_empty_dir_does_not_poison_initdb() {
+        let dir = std::env::temp_dir().join(format!("tokito_pg_prepare_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let should_mark = prepare_cluster_dir(&dir, 16).unwrap();
+
+        assert!(should_mark);
+        assert!(is_empty_dir(&dir).unwrap());
+        assert!(!dir.join(CLUSTER_SENTINEL_FILE).exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

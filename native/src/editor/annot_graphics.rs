@@ -1,7 +1,7 @@
 //! KiCad-style annotation graphics (net labels, power symbols).
 
-use egui::{Color32, Painter, Pos2, Stroke, Vec2};
 use egui::emath::Rot2;
+use egui::{Color32, Painter, Pos2, Stroke, Vec2};
 use tokito::models::NetLabelKind;
 
 #[inline]
@@ -113,17 +113,11 @@ pub fn paint_ground_symbol(painter: &Painter, anchor: Pos2, color: Color32) {
         stroke,
     );
     painter.line_segment(
-        [
-            mid + Vec2::new(-8.0, 5.0),
-            mid + Vec2::new(8.0, 5.0),
-        ],
+        [mid + Vec2::new(-8.0, 5.0), mid + Vec2::new(8.0, 5.0)],
         stroke,
     );
     painter.line_segment(
-        [
-            mid + Vec2::new(-4.0, 10.0),
-            mid + Vec2::new(4.0, 10.0),
-        ],
+        [mid + Vec2::new(-4.0, 10.0), mid + Vec2::new(4.0, 10.0)],
         stroke,
     );
 }

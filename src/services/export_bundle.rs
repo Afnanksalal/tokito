@@ -51,11 +51,8 @@ pub fn write_design_exports(
     paths.push(pack_path.to_string_lossy().into_owned());
 
     let net_path = dir.join(format!("{base_name}.txt"));
-    std::fs::write(
-        &net_path,
-        crate::services::netlist::connectivity_text(view),
-    )
-    .map_err(|e| crate::error::AppError::Any(e.into()))?;
+    std::fs::write(&net_path, crate::services::netlist::connectivity_text(view))
+        .map_err(|e| crate::error::AppError::Any(e.into()))?;
     paths.push(net_path.to_string_lossy().into_owned());
 
     let sexp_path = dir.join(format!("{base_name}.net"));
@@ -94,8 +91,7 @@ pub fn write_design_exports_zip(
     let zip_path = dir.join(format!("{base_name}_bundle.zip"));
     let file = File::create(&zip_path).map_err(|e| crate::error::AppError::Any(e.into()))?;
     let mut zip = ZipWriter::new(file);
-    let options =
-        SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     for path_str in &written.paths {
         let path = Path::new(path_str);

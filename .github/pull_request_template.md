@@ -4,9 +4,9 @@
 
 ```mermaid
 flowchart LR
-  PR[This PR] --> CI[fmt · clippy · tests]
+  PR[This PR] --> CI[fmt / clippy / tests]
   CI --> DOC{Docs / env?}
-  DOC -->|yes| U[README · docs/API · ARCHITECTURE]
+  DOC -->|yes| U[README / docs/API / ARCHITECTURE]
   DOC -->|no| R[Ready for review]
   U --> R
 ```

@@ -5,9 +5,13 @@ use uuid::Uuid;
 
 /// Creates a manufacturer; slug defaults to a slugified `name` when omitted.
 pub async fn create(pool: &PgPool, body: CreateManufacturer) -> AppResult<Manufacturer> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("manufacturer name required".into()));
+    }
     let slug = match body.slug {
-        Some(s) if !s.is_empty() => s,
-        _ => slugify(&body.name),
+        Some(s) if !s.trim().is_empty() => slugify(s.trim()),
+        _ => slugify(name),
     };
     let row = sqlx::query_as::<_, Manufacturer>(
         r#"
@@ -17,7 +21,7 @@ pub async fn create(pool: &PgPool, body: CreateManufacturer) -> AppResult<Manufa
         "#,
     )
     .bind(Uuid::new_v4())
-    .bind(&body.name)
+    .bind(name)
     .bind(&slug)
     .fetch_one(pool)
     .await

@@ -89,11 +89,12 @@ pub async fn append_lines(
         .into_iter()
         .collect();
     let mut tx = pool.begin().await?;
-    let max_sort: Option<i32> =
-        sqlx::query_scalar(r#"SELECT MAX(sort_order) FROM bom_lines WHERE design_id = $1"#)
-            .bind(design_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let max_sort: Option<i32> = sqlx::query_scalar::<_, Option<i32>>(
+        r#"SELECT MAX(sort_order) FROM bom_lines WHERE design_id = $1"#,
+    )
+    .bind(design_id)
+    .fetch_one(&mut *tx)
+    .await?;
     let base = max_sort.unwrap_or(-1) + 1;
     if !uniq.is_empty() {
         let n: (i64,) = sqlx::query_as(r#"SELECT COUNT(*)::bigint FROM parts WHERE id = ANY($1)"#)
@@ -173,7 +174,9 @@ pub async fn delete_line(pool: &PgPool, line_id: Uuid) -> AppResult<()> {
         .execute(pool)
         .await?;
     if r.rows_affected() == 0 {
-        return Err(crate::error::AppError::NotFound("bom line not found".into()));
+        return Err(crate::error::AppError::NotFound(
+            "bom line not found".into(),
+        ));
     }
     Ok(())
 }

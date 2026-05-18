@@ -17,9 +17,7 @@ pub async fn get(pool: &PgPool, design_id: Uuid) -> AppResult<Option<SchematicDo
 
     let doc: Option<SchematicDocument> = match row {
         None => None,
-        Some(v) => Some(
-            serde_json::from_value(v).map_err(|e| AppError::Any(anyhow::anyhow!(e)))?,
-        ),
+        Some(v) => Some(serde_json::from_value(v).map_err(|e| AppError::Any(anyhow::anyhow!(e)))?),
     };
     let Some(mut doc) = doc else {
         return Ok(None);

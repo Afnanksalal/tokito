@@ -44,10 +44,8 @@ pub fn repair_windows_pg_embed_cache(cache_dir: &Path) -> std::io::Result<()> {
     for tool in ["initdb", "pg_ctl", "postgres", "pg_dump", "psql"] {
         let plain = bin.join(tool);
         let exe = bin.join(format!("{tool}.exe"));
-        if exe.is_file() && !plain.is_file() {
-            if std::fs::hard_link(&exe, &plain).is_err() {
-                std::fs::copy(&exe, &plain)?;
-            }
+        if exe.is_file() && !plain.is_file() && std::fs::hard_link(&exe, &plain).is_err() {
+            std::fs::copy(&exe, &plain)?;
         }
     }
     Ok(())

@@ -32,13 +32,11 @@ pub async fn create(pool: &PgPool, body: CreateDesign, owner_user_id: Uuid) -> A
 }
 
 pub async fn get(pool: &PgPool, id: Uuid) -> AppResult<Design> {
-    sqlx::query_as::<_, Design>(&format!(
-        "SELECT {DESIGN_COLS} FROM designs WHERE id = $1"
-    ))
-    .bind(id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| AppError::NotFound("design not found".into()))
+    sqlx::query_as::<_, Design>(&format!("SELECT {DESIGN_COLS} FROM designs WHERE id = $1"))
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("design not found".into()))
 }
 
 pub fn visible_to_user(row: &Design, user_id: Uuid) -> bool {

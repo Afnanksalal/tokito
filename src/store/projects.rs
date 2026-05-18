@@ -1,9 +1,9 @@
 use crate::error::{AppError, AppResult};
-use crate::models::{CreateProject, Project};
+use crate::models::{CreateProject, PatchProject, Project};
 use crate::paths;
 use sqlx::PgPool;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 const DEFAULT_PROJECT_ID: Uuid = uuid::uuid!("00000000-0000-4000-8000-000000000001");
@@ -13,11 +13,10 @@ pub fn default_project_id() -> Uuid {
 }
 
 pub async fn ensure_default_workspace(pool: &PgPool) -> AppResult<()> {
-    let exists: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM projects WHERE id = $1")
-            .bind(DEFAULT_PROJECT_ID)
-            .fetch_optional(pool)
-            .await?;
+    let exists: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM projects WHERE id = $1")
+        .bind(DEFAULT_PROJECT_ID)
+        .fetch_optional(pool)
+        .await?;
     let workspace = paths::project_dir("default");
     fs::create_dir_all(&workspace).map_err(|e| AppError::Any(e.into()))?;
     fs::create_dir_all(paths::project_exports_dir(&workspace))
@@ -76,6 +75,29 @@ pub async fn get(pool: &PgPool, id: Uuid) -> AppResult<Project> {
     .ok_or_else(|| AppError::NotFound("project not found".into()))
 }
 
+pub async fn upsert_existing(pool: &PgPool, project: &Project) -> AppResult<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO projects (id, name, slug, workspace_path, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (id) DO UPDATE SET
+          name = EXCLUDED.name,
+          slug = EXCLUDED.slug,
+          workspace_path = EXCLUDED.workspace_path,
+          updated_at = EXCLUDED.updated_at
+        "#,
+    )
+    .bind(project.id)
+    .bind(&project.name)
+    .bind(&project.slug)
+    .bind(&project.workspace_path)
+    .bind(project.created_at)
+    .bind(project.updated_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 pub async fn create(pool: &PgPool, body: CreateProject) -> AppResult<Project> {
     let name = body.name.trim();
     if name.is_empty() {
@@ -114,7 +136,36 @@ pub async fn create(pool: &PgPool, body: CreateProject) -> AppResult<Project> {
     Ok(row)
 }
 
-pub fn read_toml_for_workspace(workspace: &PathBuf) -> crate::project_toml::ProjectToml {
+pub async fn patch(pool: &PgPool, id: Uuid, body: PatchProject) -> AppResult<Project> {
+    let current = get(pool, id).await?;
+    let name = body
+        .name
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(current.name);
+    let row = sqlx::query_as::<_, Project>(
+        r#"
+        UPDATE projects
+        SET name = $2, updated_at = now()
+        WHERE id = $1
+        RETURNING id, name, slug, workspace_path, created_at, updated_at
+        "#,
+    )
+    .bind(id)
+    .bind(&name)
+    .fetch_one(pool)
+    .await?;
+
+    let workspace = PathBuf::from(&row.workspace_path);
+    let mut meta = crate::project_toml::read(&workspace).unwrap_or_default();
+    meta.id = Some(row.id);
+    meta.name = row.name.clone();
+    meta.slug = row.slug.clone();
+    crate::project_toml::write(&workspace, &meta)?;
+    Ok(row)
+}
+
+pub fn read_toml_for_workspace(workspace: &Path) -> crate::project_toml::ProjectToml {
     crate::project_toml::read(workspace).unwrap_or_default()
 }
 

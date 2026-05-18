@@ -1,4 +1,4 @@
-//! Type ramp — uses default egui fonts with consistent pixel sizes (dense CAD UI).
+//! Type ramp with consistent pixel sizes for the dense CAD UI.
 
 use egui::{FontId, RichText};
 

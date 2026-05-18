@@ -131,6 +131,21 @@ fn build_connectivity_input(
 ) -> ConnectivityInput {
     let mut pins = Vec::new();
     for sym in symbols {
+        if sym.pin_layout.is_empty() {
+            for pin_name in &sym.pins {
+                let pw = symbol_pin_world(sym, pin_name);
+                pins.push(ConnPin {
+                    ref_des: sym.ref_des.clone(),
+                    pin_name: pin_name.clone(),
+                    position: ConnPoint {
+                        x: pw.x as f64,
+                        y: pw.y as f64,
+                    },
+                });
+            }
+            continue;
+        }
+
         for (pin_name, _, _) in &sym.pin_layout {
             let pw = symbol_pin_world(sym, pin_name);
             pins.push(ConnPin {

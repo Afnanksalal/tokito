@@ -87,16 +87,9 @@ async fn bom_line_notes_patch() -> anyhow::Result<()> {
     )
     .await?;
 
-    let patched = tokito::store::bom::patch_line(
-        &pool,
-        lines[0].id,
-        None,
-        Some("rework: add 10k pull-up"),
-    )
-    .await?;
-    assert_eq!(
-        patched.notes.as_deref(),
-        Some("rework: add 10k pull-up")
-    );
+    let patched =
+        tokito::store::bom::patch_line(&pool, lines[0].id, None, Some("rework: add 10k pull-up"))
+            .await?;
+    assert_eq!(patched.notes.as_deref(), Some("rework: add 10k pull-up"));
     Ok(())
 }

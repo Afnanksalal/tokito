@@ -1,17 +1,21 @@
-//! Design Manager — sheets, components, nets (project tree).
+//! Design Manager: sheets, components, nets.
 
 use crate::app::studio::chrome::TabChrome;
 use crate::app::App;
 use crate::editor::connectivity;
 
 impl App {
-    pub(crate) fn render_studio_design_manager_tab(&mut self, ui: &mut egui::Ui, design_id: uuid::Uuid) {
+    pub(crate) fn render_studio_design_manager_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        design_id: uuid::Uuid,
+    ) {
         let tokens = self.ui_tokens;
         let chrome = TabChrome::begin(ui, &tokens);
         chrome.header(
             ui,
             "Design manager",
-            Some("Sheets, placed components, and nets — click to select on canvas"),
+            Some("Sheets, placed components, and nets. Click to select on canvas"),
         );
 
         if let Some(design) = self.design.clone() {
@@ -24,7 +28,7 @@ impl App {
             let notes_resp = ui.add(
                 egui::TextEdit::multiline(&mut self.design_edit_notes)
                     .desired_rows(3)
-                    .hint_text("Requirements, bring-up notes…"),
+                    .hint_text("Requirements, bring-up notes"),
             );
             if name_resp.changed() || desc_resp.changed() || notes_resp.changed() {
                 self.design_save_debounce = 1.2;
@@ -45,16 +49,8 @@ impl App {
                 } else {
                     let patch = tokito::models::PatchDesign {
                         name: Some(name),
-                        description: if desc.is_empty() {
-                            None
-                        } else {
-                            Some(desc)
-                        },
-                        notes: if notes.is_empty() {
-                            None
-                        } else {
-                            Some(notes)
-                        },
+                        description: if desc.is_empty() { None } else { Some(desc) },
+                        notes: if notes.is_empty() { None } else { Some(notes) },
                     };
                     let res = self.rt.block_on(async {
                         tokito::store::designs::patch(&self.pool, id, patch).await
@@ -71,7 +67,8 @@ impl App {
             }
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Backup design").clicked()
+                if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Backup design")
+                    .clicked()
                 {
                     self.backup_current_design(design_id);
                 }
@@ -110,16 +107,16 @@ impl App {
                     let dir = tokito::services::backup::open_backups_folder(&ws);
                     let _ = open::that(dir);
                 }
-                if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Restore from zip…")
+                if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Restore from zip")
                     .clicked()
                 {
                     if let Some(zip) = rfd::FileDialog::new()
                         .add_filter("Zip", &["zip"])
                         .pick_file()
                     {
-                        let pid = design.project_id.unwrap_or_else(|| {
-                            tokito::store::projects::default_project_id()
-                        });
+                        let pid = design
+                            .project_id
+                            .unwrap_or_else(tokito::store::projects::default_project_id);
                         let res = self.rt.block_on(
                             tokito::services::project_archive::restore_design_archive(
                                 &self.pool,
@@ -147,7 +144,7 @@ impl App {
                 if ui
                     .selectable_label(
                         active,
-                        egui::RichText::new(format!("{} — {}", sheet.id, sheet.name)).size(12.0),
+                        egui::RichText::new(format!("{} | {}", sheet.id, sheet.name)).size(12.0),
                     )
                     .clicked()
                 {
@@ -184,7 +181,7 @@ impl App {
                             if ui
                                 .selectable_label(
                                     selected,
-                                    egui::RichText::new(format!("{refdes}  ·  {mpn}"))
+                                    egui::RichText::new(format!("{refdes}  |  {mpn}"))
                                         .monospace()
                                         .size(12.0),
                                 )

@@ -7,8 +7,8 @@ pub mod document;
 mod geometry;
 mod hit_test;
 mod interaction;
-mod label_placement;
 mod junctions;
+mod label_placement;
 pub mod live_erc;
 mod net_sync;
 #[cfg(test)]
@@ -48,7 +48,6 @@ pub fn show(
     symbol_lib: Option<&BaseSymbolLibrary>,
     tokens: &UiTokens,
 ) -> Option<String> {
-
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
     if resp.clicked() || resp.drag_started() {
         resp.request_focus();

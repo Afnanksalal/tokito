@@ -76,6 +76,7 @@ pub enum Route {
 pub struct App {
     _embedded_db: tokito::db::EmbeddedPostgres,
     _project_embedded: Option<tokito::db::EmbeddedPostgres>,
+    project_db_project_id: Option<Uuid>,
     db_url: String,
     global_pool: sqlx::PgPool,
     rt: tokio::runtime::Runtime,
@@ -129,6 +130,7 @@ pub struct App {
 
     /// Focus mode hides dock chrome and gives the schematic canvas the workspace.
     canvas_focus_mode: bool,
+    properties_panel_open: bool,
 
     /// Projects launcher.
     projects_search: String,
@@ -145,7 +147,7 @@ pub struct App {
     pending_edit_batch: Option<SchematicEditBatch>,
     pending_edit_selected: Vec<bool>,
 
-    /// xAI and Firecrawl are configured in Settings (required to Build).
+    /// AI provider and Firecrawl are configured in Settings (required to Build).
     ai_build_ready: bool,
 
     command_palette_open: bool,
@@ -178,6 +180,10 @@ pub struct App {
     active_project_id: Option<Uuid>,
     new_project_name: String,
     new_project_embedded_db: bool,
+    renaming_project_id: Option<Uuid>,
+    project_rename_name: String,
+    renaming_design_id: Option<Uuid>,
+    design_rename_name: String,
     projects_list_dirty: bool,
 
     build_warnings: Vec<String>,
@@ -202,7 +208,7 @@ impl App {
 
         let settings_file = tokito::config_provider::load_settings_merged();
         let cfg = settings_file.to_config()?;
-        let ai_build_ready = cfg.xai.is_some() && cfg.firecrawl.is_some();
+        let ai_build_ready = cfg.llm.is_some() && cfg.firecrawl.is_some();
         let ui_tokens = crate::theme::tokens_for(&settings_file.general.theme);
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -223,6 +229,7 @@ impl App {
         let mut app = Self {
             _embedded_db: embedded,
             _project_embedded: None,
+            project_db_project_id: None,
             db_url,
             global_pool,
             rt,
@@ -256,6 +263,7 @@ impl App {
             bom_loaded_for: None,
             bom_dirty: true,
             canvas_focus_mode: false,
+            properties_panel_open: false,
             projects_search: String::new(),
             projects_sort: ProjectsSort::default(),
             projects_pinned: HashSet::new(),
@@ -287,6 +295,10 @@ impl App {
             active_project_id: Some(tokito::store::projects::default_project_id()),
             new_project_name: String::new(),
             new_project_embedded_db: false,
+            renaming_project_id: None,
+            project_rename_name: String::new(),
+            renaming_design_id: None,
+            design_rename_name: String::new(),
             projects_list_dirty: true,
             build_warnings: vec![],
             build_stage: String::new(),
@@ -336,18 +348,88 @@ impl App {
     }
 
     pub(crate) fn shutdown_database(&mut self) {
-        let _ = self.rt.block_on(self._embedded_db.graceful_stop());
+        self.rt.block_on(self._embedded_db.graceful_stop());
         if let Some(ref mut emb) = self._project_embedded {
-            let _ = self.rt.block_on(emb.graceful_stop());
+            self.rt.block_on(emb.graceful_stop());
         }
     }
 
     fn disconnect_project_db(&mut self) {
-        self._project_embedded = None;
+        if let Some(mut emb) = self._project_embedded.take() {
+            self.rt.block_on(emb.graceful_stop());
+        }
+        self.project_db_project_id = None;
         self.pool = self.global_pool.clone();
+        self.db_url = self._embedded_db.database_url();
         if let Ok(cfg) = self.settings_file.to_config() {
             if let Ok(st) = AppState::try_new(self.pool.clone(), &cfg) {
                 self.state = st;
+            }
+        }
+    }
+
+    fn connect_project_db_for_project(&mut self, project_id: Uuid) {
+        if self.project_db_project_id == Some(project_id) {
+            return;
+        }
+        self.disconnect_project_db();
+        let project = match self
+            .rt
+            .block_on(tokito::store::projects::get(&self.global_pool, project_id))
+        {
+            Ok(project) => project,
+            Err(e) => {
+                self.set_err(e.to_string());
+                return;
+            }
+        };
+        let ws = std::path::PathBuf::from(&project.workspace_path);
+        let meta = tokito::store::projects::read_toml_for_workspace(&ws);
+        if !meta.uses_embedded_db() {
+            return;
+        }
+        let cfg = match self.settings_file.to_config() {
+            Ok(c) => c,
+            Err(e) => {
+                self.set_err(e.to_string());
+                return;
+            }
+        };
+        let res = self
+            .rt
+            .block_on(tokito::db::connect_project_embedded(&ws, &cfg));
+        match res {
+            Ok((pool, emb)) => {
+                let seed = self.rt.block_on(async {
+                    let user =
+                        tokito::store::account::find_user_by_id(&self.global_pool, self.user_id)
+                            .await?
+                            .ok_or_else(|| {
+                                tokito::error::AppError::Unauthorized("local user not found".into())
+                            })?;
+                    tokito::store::account::upsert_user_seed(&pool, &user).await?;
+                    tokito::store::projects::upsert_existing(&pool, &project).await
+                });
+                if let Err(e) = seed {
+                    self.set_err(e.to_string());
+                    return;
+                }
+                self.db_url = emb.database_url();
+                self._project_embedded = Some(emb);
+                self.project_db_project_id = Some(project_id);
+                self.pool = pool.clone();
+                if let Ok(st) = AppState::try_new(pool, &cfg) {
+                    self.state = st;
+                }
+                self.db_status = tokito::db::DatabaseStatus::Ready;
+                self.log_console(format!(
+                    "Using per-project database at {}",
+                    tokito::project_toml::ProjectToml::embedded_data_dir(&ws).display()
+                ));
+            }
+            Err(e) => {
+                self.db_status = tokito::db::DatabaseStatus::Error;
+                self.set_err(format!("Project database failed: {e}"));
             }
         }
     }
@@ -393,14 +475,13 @@ impl App {
     }
 
     pub(crate) fn toast_ok(&mut self, msg: impl Into<String>) {
-        self.toasts
-            .push(msg, crate::ui::toast::ToastKind::Success);
+        self.toasts.push(msg, crate::ui::toast::ToastKind::Success);
     }
 
     pub(crate) fn refresh_projects(&mut self) {
         let res = self
             .rt
-            .block_on(tokito::store::projects::list(&self.pool, 64));
+            .block_on(tokito::store::projects::list(&self.global_pool, 64));
         match res {
             Ok(rows) => {
                 self.projects = rows;
@@ -439,18 +520,19 @@ impl App {
             .block_on(async { tokito::store::bom::csv_export(&self.pool, design_id).await })
             .unwrap_or_default();
         let pg_ver = self.settings_file.database.pg_embed_version;
-        match tokito::services::backup::write_design_backup_with_db(
-            &ws,
-            &name,
-            &document,
-            &view,
-            &csv,
-            Some(&self.db_url),
-            pg_ver,
-        ) {
+        match self
+            .rt
+            .block_on(tokito::services::backup::write_design_backup_with_db_async(
+                &ws,
+                &name,
+                &document,
+                &view,
+                &csv,
+                Some(&self.db_url),
+                pg_ver,
+            )) {
             Ok(dir) => {
-                self.last_backup_label =
-                    format!("{}", time_format_now());
+                self.last_backup_label = time_format_now();
                 self.log_console(format!("Backup saved to {}", dir.display()));
                 self.toast_ok("Design backup saved");
             }
@@ -481,9 +563,7 @@ impl App {
         }
         let current_qty: f64 = self.bom_lines.iter().map(|l| l.quantity).sum();
         let proposed_qty: f64 = proposed.iter().map(|l| l.quantity).sum();
-        if (current_qty - proposed_qty).abs() < 0.01
-            && self.bom_lines.len() == proposed.len()
-        {
+        if (current_qty - proposed_qty).abs() < 0.01 && self.bom_lines.len() == proposed.len() {
             "In sync".into()
         } else {
             format!(
@@ -560,7 +640,7 @@ impl App {
         let n = batch.ops.len();
         self.pending_edit_batch = Some(batch);
         self.pending_edit_selected = vec![true; n];
-        self.log_console("ERC fix suggestions ready in Build — review and apply.".to_string());
+        self.log_console("ERC fix suggestions ready in Build; review and apply.".to_string());
     }
 
     pub(crate) fn import_symbol_library_folder(&mut self) {
@@ -574,7 +654,7 @@ impl App {
                 self.base_symbols = crate::base_symbols::BaseSymbolLibrary::open().ok();
                 self.err = None;
                 self.log_console(format!(
-                    "Imported {n} symbols — restart search or reload Place panel."
+                    "Imported {n} symbols; restart search or reload Place panel."
                 ));
             }
             Err(e) => self.set_err(format!("Import failed: {e}")),
@@ -715,7 +795,7 @@ impl App {
             .take(4)
             .map(|v| format!("{}: {}", v.code, v.message))
             .collect();
-        let mut s = format!("ERC advisory ({}): {}", w.len(), head.join(" · "));
+        let mut s = format!("ERC advisory ({}): {}", w.len(), head.join(" | "));
         if w.len() > 4 {
             s.push_str(&format!(" (+{} more)", w.len() - 4));
         }
@@ -726,6 +806,11 @@ impl App {
         self.err = None;
         if self.projects_list_dirty {
             self.refresh_projects();
+        }
+        if let Some(pid) = self.active_project_id {
+            self.connect_project_db_for_project(pid);
+        } else {
+            self.disconnect_project_db();
         }
         let user_id = self.user_id;
         let res = self.rt.block_on(async {
@@ -747,7 +832,11 @@ impl App {
 
     fn open_design(&mut self, design_id: Uuid) {
         self.err = None;
-        self.connect_project_db_for_design(design_id);
+        if let Some(pid) = self.active_project_id {
+            self.connect_project_db_for_project(pid);
+        } else {
+            self.connect_project_db_for_design(design_id);
+        }
         let user_id = self.user_id;
         let res = self.rt.block_on(async {
             tokito::store::designs::assert_visible(&self.pool, design_id, user_id).await
@@ -878,7 +967,7 @@ impl App {
                 self.push_recent_design(design_id);
                 self.bom_dirty = true;
                 self.log_console(format!(
-                    "Opened schematic · {}",
+                    "Opened schematic | {}",
                     self.design
                         .as_ref()
                         .map(|d| d.name.as_str())
@@ -892,7 +981,9 @@ impl App {
 
     pub(crate) fn export_schematic_file(&mut self, kind: &str) {
         if self.export_blocked_by_erc() {
-            self.set_err("Export blocked: fix ERC errors before exporting (ERC strict mode is on).");
+            self.set_err(
+                "Export blocked: fix ERC errors before exporting (ERC strict mode is on).",
+            );
             return;
         }
         let safe_name = self
@@ -926,12 +1017,14 @@ impl App {
             _ => "bin",
         };
         let dated = tokito::services::export_service::dated_filename(&safe_name, ext);
-        let default_path = export_dir.join(&dated);
         let picked = rfd::FileDialog::new()
             .set_directory(&export_dir)
             .set_file_name(&dated)
             .save_file();
-        let target = picked.unwrap_or(default_path);
+        let Some(target) = picked else {
+            self.log_console("Export canceled.");
+            return;
+        };
         let result = match kind {
             "svg" => {
                 let svg =
@@ -968,7 +1061,7 @@ impl App {
                         );
                         std::fs::write(&target, pdf).map(|_| target)
                     }
-                    Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+                    Err(e) => Err(std::io::Error::other(e.to_string())),
                 }
             }
             "bom_csv" => {
@@ -977,15 +1070,16 @@ impl App {
                 });
                 match csv {
                     Ok(text) => std::fs::write(&target, text).map(|_| target),
-                    Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+                    Err(e) => Err(std::io::Error::other(e.to_string())),
                 }
             }
             "bundle" => {
                 let (replace, _) = document.to_replace_schematic();
                 let view = tokito::models::SchematicView::from_replace(design_id, &replace);
-                match self.rt.block_on(async {
-                    tokito::store::bom::csv_export(&self.pool, design_id).await
-                }) {
+                match self
+                    .rt
+                    .block_on(async { tokito::store::bom::csv_export(&self.pool, design_id).await })
+                {
                     Ok(csv) => {
                         let mcad = tokito::services::mcad_export::document_handoff_json(
                             &document,
@@ -999,28 +1093,18 @@ impl App {
                             &csv,
                             Some(&mcad),
                         ) {
-                            Ok(w) => Ok(
-                                w.zip_path.unwrap_or_else(|| {
-                                    export_dir.join(format!("{safe_name}_bundle.zip"))
-                                }),
-                            ),
-                            Err(e) => Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                e.to_string(),
-                            )),
+                            Ok(w) => Ok(w.zip_path.unwrap_or_else(|| {
+                                export_dir.join(format!("{safe_name}_bundle.zip"))
+                            })),
+                            Err(e) => Err(std::io::Error::other(e.to_string())),
                         }
                     }
-                    Err(e) => Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    )),
+                    Err(e) => Err(std::io::Error::other(e.to_string())),
                 }
             }
             "mcad" => {
-                let json = tokito::services::mcad_export::document_handoff_json(
-                    &document,
-                    design_title,
-                );
+                let json =
+                    tokito::services::mcad_export::document_handoff_json(&document, design_title);
                 std::fs::write(&target, json).map(|_| target)
             }
             _ => return,
@@ -1029,7 +1113,10 @@ impl App {
             Ok(path) => {
                 self.err = None;
                 self.log_console(format!("Exported {}", path.display()));
-                self.toast_ok(format!("Exported {}", path.file_name().and_then(|s| s.to_str()).unwrap_or("file")));
+                self.toast_ok(format!(
+                    "Exported {}",
+                    path.file_name().and_then(|s| s.to_str()).unwrap_or("file")
+                ));
                 self.open_path_after_export(path.as_path());
                 crate::util::reveal_in_folder(path.as_path());
             }
@@ -1112,28 +1199,29 @@ impl App {
                     }
                     self.build_stage.clear();
                     if let Route::Studio { design_id } = self.route {
-                        if let Ok(v) = self.rt.block_on(
-                            tokito::services::design_pipeline::reconcile_bom(
-                                &self.pool, design_id,
-                            ),
-                        ) {
+                        if let Ok(v) =
+                            self.rt
+                                .block_on(tokito::services::design_pipeline::reconcile_bom(
+                                    &self.pool, design_id,
+                                ))
+                        {
                             if let Some(msg) = v.get("message").and_then(|m| m.as_str()) {
                                 self.build_bom_diff = Some(msg.to_string());
                             }
                         }
                     }
-                    self.log_console("Build complete — review proposed changes in the Build tab.");
+                    self.log_console("Build complete; review proposed changes in the Build tab.");
                 }
                 Ok(Err(msg)) => {
                     self.prompt_busy = false;
                     self.generation_rx = None;
                     let mut m = msg;
-                    if m.contains("API_KEY") || m.contains("api key") || m.contains("xAI") {
-                        m.push_str(&format!(" — {}", tokito::user_messages::XAI_NOT_CONFIGURED));
+                    if m.contains("API_KEY") || m.contains("api key") || m.contains("AI") {
+                        m.push_str(&format!("; {}", tokito::user_messages::AI_NOT_CONFIGURED));
                     }
                     if m.contains("Firecrawl") || m.contains("firecrawl") {
                         m.push_str(&format!(
-                            " — {}",
+                            "; {}",
                             tokito::user_messages::FIRECRAWL_NOT_CONFIGURED
                         ));
                     }
@@ -1300,7 +1388,7 @@ impl App {
         self.pending_edit_selected.clear();
         self.studio_dirty = true;
         self.log_console(format!(
-            "Applied {applied} build edit(s) — Undo reverts the batch."
+            "Applied {applied} build edit(s); Undo reverts the batch."
         ));
     }
 
@@ -1387,16 +1475,15 @@ impl App {
     }
 
     pub(crate) fn cut_selection(&mut self) {
-        if self.editor.copy_selection() {
-            self.editor.delete_selected();
-            self.studio_dirty = true;
+        if self.editor.copy_selection() && self.editor.delete_selected() {
+            self.after_canvas_geometry_change();
         }
     }
 
     pub(crate) fn paste_selection(&mut self) {
         let n = self.editor.paste_clipboard();
         if n > 0 {
-            self.studio_dirty = true;
+            self.after_canvas_geometry_change();
             self.log_console(format!("Pasted {n} item(s)."));
         }
     }
@@ -1414,6 +1501,7 @@ impl App {
             .editor
             .duplicate_selected_symbols(egui::Vec2::new(crate::canvas::GRID_PX * 2.0, 0.0));
         if n > 0 {
+            self.after_canvas_geometry_change();
             self.log_console(format!("Duplicated {n} symbol(s)."));
         }
     }
@@ -1573,7 +1661,7 @@ impl App {
             return;
         }
         if !self.ai_build_ready {
-            self.set_err("AI build requires xAI and Firecrawl API keys in Settings.");
+            self.set_err("AI build requires an AI provider key and Firecrawl key in Settings.");
             return;
         }
         let trimmed = self.prompt.trim().to_string();
@@ -1589,7 +1677,7 @@ impl App {
         self.build_cancel_flag = Some(cancel.clone());
 
         self.prompt_busy = true;
-        self.build_stage = "Planning…".into();
+        self.build_stage = "Planning...".into();
         self.build_warnings.clear();
         self.build_bom_diff = None;
         self.err = None;
@@ -1601,12 +1689,12 @@ impl App {
         let state = self.state.clone();
         let pool = self.pool.clone();
         let repaint = ctx.clone();
-        let stage = std::sync::Arc::new(std::sync::Mutex::new("Planning…".to_string()));
+        let stage = std::sync::Arc::new(std::sync::Mutex::new("Planning...".to_string()));
         let stage_cb = stage.clone();
         self.rt.spawn(async move {
             {
                 let mut g = stage_cb.lock().unwrap();
-                *g = "Research (Firecrawl)…".into();
+                *g = "Research (Firecrawl)...".into();
             }
             let outcome = tokito::services::design_pipeline::build_design_from_prompt(
                 &state,
@@ -1638,18 +1726,20 @@ impl App {
 
     pub(crate) fn search_parts_catalog(&mut self) {
         let q = self.place_query.trim().to_string();
-        let res = self.rt.block_on(async {
-            tokito::store::parts::search(
-                &self.pool,
-                PartSearchParams {
-                    q: if q.is_empty() { None } else { Some(q) },
-                    limit: Some(50),
-                },
-            )
-            .await
-        });
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.rt.block_on(async {
+                tokito::store::parts::search(
+                    &self.pool,
+                    PartSearchParams {
+                        q: if q.is_empty() { None } else { Some(q) },
+                        limit: Some(50),
+                    },
+                )
+                .await
+            })
+        }));
         match res {
-            Ok(rows) => {
+            Ok(Ok(rows)) => {
                 self.parts_hits = rows
                     .into_iter()
                     .map(|p| PartRow {
@@ -1660,7 +1750,8 @@ impl App {
                     })
                     .collect();
             }
-            Err(e) => self.set_err(e),
+            Ok(Err(e)) => self.set_err(e),
+            Err(_) => self.set_err("Component search failed unexpectedly"),
         }
     }
 
@@ -1679,11 +1770,13 @@ impl App {
             return;
         }
         let state = self.state.clone();
-        let res = self.rt.block_on(async move {
-            tokito::services::catalog_search::search(&state, &q, 30).await
-        });
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.rt.block_on(async move {
+                tokito::services::catalog_search::search(&state, &q, 30).await
+            })
+        }));
         match res {
-            Ok(hits) => {
+            Ok(Ok(hits)) => {
                 self.catalog_hits = hits
                     .into_iter()
                     .map(|h| CatalogHit {
@@ -1709,7 +1802,8 @@ impl App {
                     self.catalog_hits.len()
                 ));
             }
-            Err(e) => self.set_err(e),
+            Ok(Err(e)) => self.set_err(e),
+            Err(_) => self.set_err("Catalog search failed unexpectedly"),
         }
     }
 
@@ -1814,7 +1908,7 @@ impl App {
             ref_des,
             hit.distributor,
             if part_id.is_some() {
-                " — part saved to library"
+                "; part saved to library"
             } else {
                 ""
             }
@@ -1857,7 +1951,19 @@ impl App {
     }
 
     fn delete_selected(&mut self) {
-        self.editor.delete_selected();
+        if self.editor.delete_selected() {
+            self.after_canvas_geometry_change();
+        }
+    }
+
+    fn after_canvas_geometry_change(&mut self) {
+        self.editor.refresh_wire_connectivity();
+        self.editor.selected_erc_marker = None;
+        self.editor.erc_marker_index = None;
+        self.erc_violations.clear();
+        self.erc_note = None;
+        self.studio_dirty = true;
+        self.mcad_viewer.invalidate();
     }
 }
 

@@ -1,6 +1,6 @@
 //! Axum router, shared [`AppState`], and middleware (CORS, tracing).
 
-use crate::config::{FirecrawlConfig, NexarConfig, XaiConfig};
+use crate::config::{FirecrawlConfig, LlmConfig, NexarConfig};
 use crate::handlers;
 use axum::body::Body;
 use axum::http::{header, StatusCode};
@@ -10,6 +10,7 @@ use axum::response::Response;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use sqlx::PgPool;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -22,11 +23,12 @@ pub struct AppState {
     pub pool: PgPool,
     pub http: reqwest::Client,
     pub jwt_secret: String,
-    pub xai: Option<XaiConfig>,
+    pub llm: Option<LlmConfig>,
     pub firecrawl: Option<FirecrawlConfig>,
     pub nexar: Option<NexarConfig>,
     #[allow(clippy::type_complexity)]
     pub nexar_token_cache: Option<Arc<Mutex<Option<(String, std::time::Instant)>>>>,
+    pub auth_attempts: Arc<Mutex<HashMap<String, Vec<std::time::Instant>>>>,
     pub lcsc_anonymous_search: bool,
     pub agent: crate::config::AgentLimits,
 }
@@ -44,10 +46,11 @@ impl AppState {
             pool,
             http,
             jwt_secret: cfg.jwt_secret.clone(),
-            xai: cfg.xai.clone(),
+            llm: cfg.llm.clone(),
             firecrawl: cfg.firecrawl.clone(),
             nexar: cfg.nexar.clone(),
             nexar_token_cache,
+            auth_attempts: Arc::new(Mutex::new(HashMap::new())),
             lcsc_anonymous_search: cfg.lcsc_anonymous_search,
             agent: cfg.agent.clone(),
         })
@@ -62,10 +65,11 @@ impl AppState {
                 .build()
                 .expect("reqwest client"),
             jwt_secret: "unit-test-jwt-secret-do-not-use".to_string(),
-            xai: None,
+            llm: None,
             firecrawl: None,
             nexar: None,
             nexar_token_cache: None,
+            auth_attempts: Arc::new(Mutex::new(HashMap::new())),
             lcsc_anonymous_search: true,
             agent: crate::config::AgentLimits {
                 max_iterations: 2,
@@ -108,7 +112,11 @@ pub fn build(
     let protected = Router::new()
         .route(
             "/integrations/xai/chat/completions",
-            post(handlers::xai_chat_completions),
+            post(handlers::ai_chat_completions),
+        )
+        .route(
+            "/integrations/ai/chat/completions",
+            post(handlers::ai_chat_completions),
         )
         .route(
             "/integrations/firecrawl/scrape",
@@ -253,20 +261,15 @@ pub fn build(
 }
 
 fn build_cors_layer(origins: Vec<String>) -> CorsLayer {
-    if origins.is_empty() {
-        return CorsLayer::permissive();
-    }
     let mut list = Vec::with_capacity(origins.len());
     for o in origins {
         if let Ok(h) = HeaderValue::from_str(&o) {
             list.push(h);
+        } else {
+            tracing::warn!(origin = %o, "ignoring invalid CORS origin");
         }
     }
-    if list.is_empty() {
-        return CorsLayer::permissive();
-    }
-    CorsLayer::new()
-        .allow_origin(AllowOrigin::list(list))
+    let layer = CorsLayer::new()
         .allow_methods([
             Method::GET,
             Method::POST,
@@ -275,5 +278,9 @@ fn build_cors_layer(origins: Vec<String>) -> CorsLayer {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers(tower_http::cors::Any)
+        .allow_headers(tower_http::cors::Any);
+    if list.is_empty() {
+        return layer;
+    }
+    layer.allow_origin(AllowOrigin::list(list))
 }

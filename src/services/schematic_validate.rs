@@ -328,9 +328,7 @@ pub fn erc_full_with_options(
 }
 
 pub fn has_blocking_erc(violations: &[ErcViolation]) -> bool {
-    violations
-        .iter()
-        .any(|v| v.severity == ErcSeverity::Error)
+    violations.iter().any(|v| v.severity == ErcSeverity::Error)
 }
 
 fn erc_deep_with_options(

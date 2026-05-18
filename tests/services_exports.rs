@@ -60,7 +60,10 @@ fn pdf_review_includes_vector_strokes() {
     let pdf = tokito::services::pdf_export::document_to_pdf_titled(&doc, "T");
     assert!(pdf.starts_with(b"%PDF"));
     let body = String::from_utf8_lossy(&pdf);
-    assert!(body.contains(" m") || body.contains(" l"), "review PDF must draw strokes");
+    assert!(
+        body.contains(" m") || body.contains(" l"),
+        "review PDF must draw strokes"
+    );
 }
 
 #[test]

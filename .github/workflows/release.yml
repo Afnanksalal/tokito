@@ -5,28 +5,42 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.88
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Check workspace
+        run: cargo check --workspace --locked
+
       - name: Build release
-        run: cargo build --release -p tokito-native
+        run: cargo build --locked --release -p tokito-native
 
       - name: Package portable app
         shell: pwsh
-        run: ./scripts/package-windows.ps1
+        run: ./scripts/package-windows.ps1 -SkipBuild
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Tokito-windows-x64
           path: dist/Tokito/
+          if-no-files-found: error
+          retention-days: 14

@@ -62,7 +62,10 @@ async fn put_and_get_schematic_document() {
             .unwrap();
         assert_eq!(get.status(), StatusCode::OK);
         let loaded = json_body(get).await;
-        assert_eq!(loaded["schema_version"], 1);
+        assert_eq!(
+            loaded["schema_version"],
+            serde_json::json!(tokito::models::SCHEMATIC_DOCUMENT_SCHEMA_VERSION)
+        );
         Ok(())
     })
     .await

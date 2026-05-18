@@ -1,4 +1,4 @@
-//! Agent tool-loop panel (xAI + local DB tools).
+//! Agent tool-loop panel (AI provider + local DB tools).
 
 use uuid::Uuid;
 
@@ -15,8 +15,11 @@ impl App {
             Some("Ask Tokito to search parts, scrape URLs, or update the BOM"),
         );
 
-        if self.state.xai.is_none() {
-            chrome.empty(ui, "Set xAI API key in Settings to use the agent.");
+        if self.state.llm.is_none() {
+            chrome.empty(
+                ui,
+                "Set an AI provider API key in Settings to use the agent.",
+            );
             return;
         }
 
@@ -41,17 +44,18 @@ impl App {
         ui.add(
             egui::TextEdit::multiline(&mut self.agent_query)
                 .desired_rows(4)
-                .hint_text("Example: Find a 3.3 V LDO for 500 mA and add to BOM…"),
+                .hint_text("Example: Find a 3.3 V LDO for 500 mA and add to BOM"),
         );
         ui.horizontal(|ui| {
             let can_run = !self.agent_busy && !self.agent_query.trim().is_empty();
-            if crate::ui::widgets::primary_button(ui, chrome.tokens, "Run agent").clicked() && can_run
+            if crate::ui::widgets::primary_button(ui, chrome.tokens, "Run agent").clicked()
+                && can_run
             {
                 self.run_agent(design_id, ui.ctx());
             }
             if self.agent_busy {
                 ui.spinner();
-                ui.label(egui::RichText::new("Running…").small().weak());
+                ui.label(egui::RichText::new("Running...").small().weak());
             }
         });
         ui.add_space(8.0);
@@ -59,7 +63,7 @@ impl App {
         ui.label(
             egui::RichText::new(
                 "The agent can search_parts, scrape_url, sync_part_offers, get_design_bom, append_bom_lines. \
-                 It does not edit the schematic — use Build for that.",
+                 It does not edit the schematic; use Build for that.",
             )
             .small()
             .weak(),

@@ -18,9 +18,9 @@ pub fn set_secret(key: &str, value: &str) -> anyhow::Result<()> {
 }
 
 pub fn apply_keychain_to_settings(settings: &mut crate::settings::SettingsFile) {
-    if settings.ai.xai_api_key.is_empty() {
-        if let Some(v) = get_secret("xai_api_key") {
-            settings.ai.xai_api_key = v;
+    if settings.ai.llm_api_key.is_empty() {
+        if let Some(v) = get_secret("llm_api_key").or_else(|| get_secret("xai_api_key")) {
+            settings.ai.llm_api_key = v;
         }
     }
     if settings.ai.firecrawl_api_key.is_empty() {
@@ -41,7 +41,7 @@ pub fn apply_keychain_to_settings(settings: &mut crate::settings::SettingsFile) 
 }
 
 pub fn persist_keychain_from_settings(settings: &crate::settings::SettingsFile) {
-    let _ = set_secret("xai_api_key", &settings.ai.xai_api_key);
+    let _ = set_secret("llm_api_key", &settings.ai.llm_api_key);
     let _ = set_secret("firecrawl_api_key", &settings.ai.firecrawl_api_key);
     let _ = set_secret("nexar_client_id", &settings.catalog.nexar_client_id);
     let _ = set_secret("nexar_client_secret", &settings.catalog.nexar_client_secret);

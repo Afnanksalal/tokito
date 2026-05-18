@@ -64,16 +64,14 @@ pub fn data_table<R, FRow>(
         }
     });
     ui.add_space(4.0);
-    egui::ScrollArea::vertical()
-        .id_salt(id)
-        .show(ui, |ui| {
-            for row in rows.iter() {
-                ui.horizontal(|ui| {
-                    render_row(ui, row);
-                });
-                ui.add_space(2.0);
-            }
-        });
+    egui::ScrollArea::vertical().id_salt(id).show(ui, |ui| {
+        for row in rows.iter() {
+            ui.horizontal(|ui| {
+                render_row(ui, row);
+            });
+            ui.add_space(2.0);
+        }
+    });
 }
 
 pub fn sortable_header(ui: &mut Ui, label: &str, col: usize, sort: &mut SortState) -> bool {

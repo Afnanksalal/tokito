@@ -300,6 +300,7 @@ pub async fn put_schematic(
     let doc = SchematicDocument::from_replace_schematic(&body);
     let erc = crate::services::schematic_validate::erc_full(&body, &doc);
     schematic::replace(&state.pool, id, body).await?;
+    schematic_document::upsert(&state.pool, id, &doc).await?;
     Ok(Json(serde_json::json!({ "ok": true, "erc_warnings": erc })))
 }
 

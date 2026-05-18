@@ -1,11 +1,10 @@
-//! Natural-language → schematic JSON (ReplaceSchematic) via xAI.
+//! Natural-language → schematic JSON (ReplaceSchematic) via the configured AI provider.
 
 use crate::error::{AppError, AppResult};
 use crate::models::{ErcViolation, ReplaceSchematic};
 use crate::router::AppState;
+use crate::services::llm;
 use crate::services::schematic_validate::{erc_light, validate_topology};
-use crate::services::xai;
-use crate::store::account;
 use crate::store::{bom, designs, intent, parts, research};
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -104,8 +103,6 @@ pub async fn suggest_from_prompt(
     user_prompt: &str,
     enforce_catalog_part_ids: bool,
 ) -> AppResult<(ReplaceSchematic, Vec<ErcViolation>)> {
-    account::ensure_llm_quota(pool, user_id, 96_000).await?;
-
     let bom = bom::list_for_design(pool, design_id).await?;
     if enforce_catalog_part_ids && bom.is_empty() {
         return Err(AppError::BadRequest(
@@ -184,19 +181,17 @@ Keep nets reasonably named (VIN,VOUT,VCC,GND,SW,BST,FB,SCL,SDA,...)."#
         "temperature": 0.2,
     });
 
-    let resp = xai::chat_completion(state, body).await?;
-    let (pt, ct) = xai::usage_tokens(&resp);
-    account::record_llm_usage(pool, user_id, pt, ct).await?;
+    let resp = llm::metered_chat_completion(state, pool, user_id, body, 96_000).await?;
 
     let choice = resp
         .get("choices")
         .and_then(|c| c.as_array())
         .and_then(|a| a.first())
-        .ok_or_else(|| AppError::Upstream("xAI missing choices".into()))?;
+        .ok_or_else(|| AppError::Upstream("AI response missing choices".into()))?;
     let content = choice
         .pointer("/message/content")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Upstream("xAI missing message content".into()))?;
+        .ok_or_else(|| AppError::Upstream("AI response missing message content".into()))?;
 
     let json_raw = extract_llm_json_object(content)?;
     let parsed: ReplaceSchematic = serde_json::from_str(&json_raw)

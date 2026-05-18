@@ -77,12 +77,14 @@ pub fn export_design_bytes(
         }),
         ExportFormat::PdfPack => {
             let (body, _) = document.to_replace_schematic();
-            let erc = crate::services::schematic_validate::erc_full_with_options(
-                &body, document, false,
-            );
+            let erc =
+                crate::services::schematic_validate::erc_full_with_options(&body, document, false);
             Ok(ExportPayload {
                 bytes: crate::services::pdf_export::document_to_pdf_pack(
-                    document, design_name, bom_csv, &erc,
+                    document,
+                    design_name,
+                    bom_csv,
+                    &erc,
                 ),
                 content_type: "application/pdf",
                 filename: format!("{safe}_pack.pdf"),
@@ -112,21 +114,34 @@ pub fn export_design_bytes(
             })
         }
         ExportFormat::BundleZip => {
-            let dir = std::env::temp_dir().join(format!("tokito_export_{design_id}"));
-            let _ = std::fs::remove_dir_all(&dir);
+            let dir =
+                std::env::temp_dir().join(format!("tokito_export_{design_id}_{}", Uuid::new_v4()));
             let mcad = crate::services::mcad_export::document_handoff_json(document, design_name);
-            let written = crate::services::export_bundle::write_design_exports_zip(
+            let result = crate::services::export_bundle::write_design_exports_zip(
                 &dir,
                 &safe,
                 document,
                 view,
                 bom_csv,
                 Some(&mcad),
-            )?;
+            );
+            let written = match result {
+                Ok(written) => written,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&dir);
+                    return Err(e);
+                }
+            };
             let zip_path = written
                 .zip_path
                 .ok_or_else(|| AppError::BadRequest("bundle zip missing".into()))?;
-            let bytes = std::fs::read(&zip_path).map_err(|e| AppError::Any(e.into()))?;
+            let bytes = match std::fs::read(&zip_path).map_err(|e| AppError::Any(e.into())) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    let _ = std::fs::remove_dir_all(&dir);
+                    return Err(e);
+                }
+            };
             let _ = std::fs::remove_dir_all(&dir);
             Ok(ExportPayload {
                 bytes,
@@ -166,7 +181,13 @@ pub fn dated_filename(base: &str, ext: &str) -> String {
 }
 
 fn sanitize_filename(name: &str) -> String {
-    name.chars()
+    let safe: String = name
+        .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect()
+        .collect();
+    if safe.trim_matches('_').is_empty() {
+        "design".to_string()
+    } else {
+        safe
+    }
 }

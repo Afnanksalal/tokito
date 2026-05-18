@@ -1,4 +1,4 @@
-//! Build panel — AI researches parts and drafts the schematic; you review and edit.
+//! Build panel: AI researches parts and drafts the schematic; you review and edit.
 
 use uuid::Uuid;
 
@@ -13,7 +13,7 @@ impl App {
             ui,
             "Build",
             Some(
-                "Tell Tokito what you need. AI researches parts, writes the BOM, and drafts the schematic — you edit on the canvas.",
+                "Describe the board. Tokito researches parts, drafts the BOM, and prepares schematic edits.",
             ),
         );
 
@@ -25,8 +25,11 @@ impl App {
                         .color(chrome.tokens.text_primary),
                 );
                 ui.add_space(4.0);
-                ui.label("Open the Settings panel and enter your xAI and Firecrawl API keys.");
-                if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Open Settings").clicked()
+                ui.label(
+                    "Open the Settings panel and enter your AI provider and Firecrawl API keys.",
+                );
+                if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Open Settings")
+                    .clicked()
                 {
                     use crate::app::studio_dock::{ensure_tab_visible, StudioTab};
                     ensure_tab_visible(&mut self.dock_state, StudioTab::Settings);
@@ -47,7 +50,7 @@ impl App {
                     .map(|p| tokito::services::erc_fixes::provenance_label(p).to_string())
                     .collect();
                 ui.label(
-                    egui::RichText::new(format!("Source: {}", tags.join(" · ")))
+                    egui::RichText::new(format!("Source: {}", tags.join(" | ")))
                         .small()
                         .weak(),
                 );
@@ -95,7 +98,7 @@ impl App {
         chrome.subsection(ui, "What should this board do?");
         ui.add(
             egui::TextEdit::multiline(&mut self.prompt)
-                .hint_text("Example: 12 V → 5 V buck, 2 A, synchronous, enable pin, LC filter…")
+                .hint_text("Example: 12 V to 5 V buck, 2 A, synchronous, enable pin, LC filter")
                 .desired_rows(8)
                 .margin(egui::Margin::symmetric(10.0, 8.0)),
         );
@@ -112,7 +115,7 @@ impl App {
         if self.prompt_busy {
             ui.add_space(8.0);
             let label = if self.build_stage.is_empty() {
-                "Building…".to_string()
+                "Building...".to_string()
             } else {
                 self.build_stage.clone()
             };
@@ -137,7 +140,7 @@ impl App {
         ui.add_space(10.0);
         let can_build = self.ai_build_ready && !self.prompt_busy && !self.prompt.trim().is_empty();
         let build_label = if self.prompt_busy {
-            "Building — research → BOM → schematic…"
+            "Building: research, BOM, schematic..."
         } else {
             "Build schematic"
         };
@@ -171,7 +174,7 @@ impl App {
         ui.add_space(10.0);
         ui.label(
             egui::RichText::new(
-                "Ctrl/⌘+Enter build · Ctrl+Shift+P commands · Ctrl+D duplicate · Del delete",
+                "Ctrl/Cmd+Enter build | Ctrl+Shift+P commands | Ctrl+D duplicate | Del delete",
             )
             .small()
             .weak()

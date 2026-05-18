@@ -17,14 +17,9 @@ pub enum ToastKind {
     Error,
 }
 
+#[derive(Default)]
 pub struct ToastStack {
     items: Vec<Toast>,
-}
-
-impl Default for ToastStack {
-    fn default() -> Self {
-        Self { items: Vec::new() }
-    }
 }
 
 impl ToastStack {

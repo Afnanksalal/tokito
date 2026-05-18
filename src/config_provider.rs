@@ -1,7 +1,7 @@
-//! Layered configuration: defaults → settings.toml → env overlay (CI) → keychain.
+//! Layered configuration: defaults, settings.toml, env overlay (CI), keychain.
 
 use crate::config::Config;
-use crate::settings::{merge_from_env, load_file, SettingsFile};
+use crate::settings::{load_file, merge_from_env, SettingsFile};
 
 /// Loads persisted settings and runtime `Config`.
 pub trait ConfigProvider: Send + Sync {
@@ -70,7 +70,7 @@ mod tests {
     }
 
     #[test]
-    fn env_overlay_merges_xai_key() {
+    fn env_overlay_merges_legacy_xai_key() {
         struct EmptyProvider;
         impl ConfigProvider for EmptyProvider {
             fn load_settings(&self) -> crate::settings::SettingsFile {
@@ -78,8 +78,11 @@ mod tests {
             }
         }
         std::env::set_var("TOKITO_XAI_API_KEY", "overlay-test");
-        let s = EnvOverlayProvider { inner: EmptyProvider }.load_settings();
-        assert_eq!(s.ai.xai_api_key, "overlay-test");
+        let s = EnvOverlayProvider {
+            inner: EmptyProvider,
+        }
+        .load_settings();
+        assert_eq!(s.ai.llm_api_key, "overlay-test");
         std::env::remove_var("TOKITO_XAI_API_KEY");
     }
 }

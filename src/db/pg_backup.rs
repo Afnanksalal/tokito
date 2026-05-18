@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use pg_embed::pg_access::PgAccess;
+use url::Url;
 
 use crate::db::pg_embed_util::{pg_embed_binaries_present, pg_fetch_settings, required_pg_tool};
 
@@ -36,7 +37,11 @@ async fn resolve_embedded_pg_dump(version: u16) -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-fn run_pg_dump(database_url: &str, dest_sql: &Path, preferred: Option<&Path>) -> anyhow::Result<()> {
+fn run_pg_dump(
+    database_url: &str,
+    dest_sql: &Path,
+    preferred: Option<&Path>,
+) -> anyhow::Result<()> {
     if let Some(exe) = preferred {
         if try_pg_dump(exe, database_url, dest_sql).is_ok() {
             return Ok(());
@@ -60,9 +65,10 @@ fn run_pg_dump(database_url: &str, dest_sql: &Path, preferred: Option<&Path>) ->
 }
 
 fn try_pg_dump(exe: &Path, database_url: &str, dest_sql: &Path) -> anyhow::Result<()> {
-    let out = Command::new(exe)
-        .arg("--dbname")
-        .arg(database_url)
+    let conn = PgDumpConnection::parse(database_url);
+    let mut cmd = Command::new(exe);
+    conn.apply(&mut cmd);
+    let out = cmd
         .arg("--no-owner")
         .arg("--no-acl")
         .arg("-f")
@@ -77,4 +83,64 @@ fn try_pg_dump(exe: &Path, database_url: &str, dest_sql: &Path) -> anyhow::Resul
         "pg_dump failed"
     );
     anyhow::bail!("pg_dump exit {}", out.status);
+}
+
+struct PgDumpConnection {
+    host: Option<String>,
+    port: Option<String>,
+    user: Option<String>,
+    password: Option<String>,
+    database: String,
+    sslmode: Option<String>,
+}
+
+impl PgDumpConnection {
+    fn parse(database_url: &str) -> Self {
+        let Ok(url) = Url::parse(database_url) else {
+            return Self {
+                host: None,
+                port: None,
+                user: None,
+                password: None,
+                database: database_url.to_string(),
+                sslmode: None,
+            };
+        };
+        let database = url.path().trim_start_matches('/').to_string();
+        let sslmode = url
+            .query_pairs()
+            .find(|(k, _)| k == "sslmode")
+            .map(|(_, v)| v.to_string());
+        Self {
+            host: url.host_str().map(str::to_string),
+            port: url.port().map(|p| p.to_string()),
+            user: (!url.username().is_empty()).then(|| url.username().to_string()),
+            password: url.password().map(str::to_string),
+            database: if database.is_empty() {
+                "postgres".to_string()
+            } else {
+                database
+            },
+            sslmode,
+        }
+    }
+
+    fn apply(&self, cmd: &mut Command) {
+        if let Some(host) = &self.host {
+            cmd.env("PGHOST", host);
+        }
+        if let Some(port) = &self.port {
+            cmd.env("PGPORT", port);
+        }
+        if let Some(user) = &self.user {
+            cmd.env("PGUSER", user);
+        }
+        if let Some(password) = &self.password {
+            cmd.env("PGPASSWORD", password);
+        }
+        if let Some(sslmode) = &self.sslmode {
+            cmd.env("PGSSLMODE", sslmode);
+        }
+        cmd.arg("--dbname").arg(&self.database);
+    }
 }

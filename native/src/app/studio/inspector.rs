@@ -9,7 +9,7 @@ impl App {
         let chrome = TabChrome::begin(ui, &tokens);
         chrome.header(ui, "Properties", None);
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Delete").clicked() {
                 self.delete_selected();
             }
@@ -87,6 +87,7 @@ impl App {
                 }
                 self.editor.selected_segment = None;
                 self.editor.selected_segments.clear();
+                self.after_canvas_geometry_change();
             }
         } else if let Some(r) = self.editor.selected_sym.clone() {
             if let Some(idx) = self.editor.symbols.iter().position(|s| s.ref_des == r) {
@@ -137,9 +138,11 @@ impl App {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                     if crate::ui::layout::filter_chip(ui, chrome.tokens, "Rotate 90°", false) {
                         self.editor.rotate_selected_symbols(90.0);
+                        self.after_canvas_geometry_change();
                     }
                     if crate::ui::layout::filter_chip(ui, chrome.tokens, "Mirror X", false) {
                         self.editor.mirror_selected_symbols_x();
+                        self.after_canvas_geometry_change();
                     }
                     if crate::ui::layout::filter_chip(ui, chrome.tokens, "Duplicate", false) {
                         self.duplicate_selection();
@@ -156,6 +159,7 @@ impl App {
                         self.editor.selected_syms.remove(&rd);
                         self.before_canvas_edit();
                         self.editor.symbols.retain(|s| s.ref_des != rd);
+                        self.after_canvas_geometry_change();
                     }
                 });
             }
@@ -190,7 +194,9 @@ impl App {
                     }
                     ui.label(egui::RichText::new("Rotation °").small().weak());
                     let mut rot = self.editor.net_labels[i].rotation_deg;
-                    if ui.add(egui::DragValue::new(&mut rot).range(0.0..=270.0).speed(1.0)).changed()
+                    if ui
+                        .add(egui::DragValue::new(&mut rot).range(0.0..=270.0).speed(1.0))
+                        .changed()
                     {
                         self.before_canvas_edit();
                         self.editor.net_labels[i].rotation_deg = rot;

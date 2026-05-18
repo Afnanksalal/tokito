@@ -63,25 +63,13 @@ impl StudioTab {
     }
 }
 
-/// Default layout: schematic center, build/BOM/design/preview on the right, messages/research/console below.
+/// Default layout: parts sidebar is outside the dock, schematic stays central, prompt/build is right.
 pub fn default_studio_dock() -> DockState<StudioTab> {
     let mut dock = DockState::new(vec![StudioTab::Canvas]);
     let root = NodeIndex::root();
-    let [canvas, _bottom] = dock.main_surface_mut().split_below(
-        root,
-        0.78,
-        vec![StudioTab::Messages, StudioTab::Research, StudioTab::Console],
-    );
-    let [_canvas, _right] = dock.main_surface_mut().split_right(
-        canvas,
-        0.66,
-        vec![
-            StudioTab::Build,
-            StudioTab::Bom,
-            StudioTab::DesignManager,
-            StudioTab::Viewer3d,
-        ],
-    );
+    let [_canvas, _right] = dock
+        .main_surface_mut()
+        .split_right(root, 0.70, vec![StudioTab::Build]);
     dock
 }
 

@@ -39,7 +39,11 @@ pub fn document_to_svg_titled(doc: &SchematicDocument, design_name: &str) -> Str
         ));
     }
 
-    s.push_str(&schematic_graphics::title_block_svg(design_name, &t, page_w));
+    s.push_str(&schematic_graphics::title_block_svg(
+        design_name,
+        &t,
+        page_w,
+    ));
 
     for seg in &doc.wire_segments {
         s.push_str(&schematic_graphics::wire_svg(seg, &t));

@@ -90,17 +90,17 @@ impl App {
                             }
                             let ord = match self.bom_sort.column {
                                 0 => a.1.cmp(&b.1),
-                                1 => a
-                                    .0
-                                    .quantity
-                                    .partial_cmp(&b.0.quantity)
-                                    .unwrap_or(std::cmp::Ordering::Equal),
-                                2 => a
-                                    .0
-                                    .notes
-                                    .as_deref()
-                                    .unwrap_or("")
-                                    .cmp(b.0.notes.as_deref().unwrap_or("")),
+                                1 => {
+                                    a.0.quantity
+                                        .partial_cmp(&b.0.quantity)
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                }
+                                2 => {
+                                    a.0.notes
+                                        .as_deref()
+                                        .unwrap_or("")
+                                        .cmp(b.0.notes.as_deref().unwrap_or(""))
+                                }
                                 3 => a.0.part_id.cmp(&b.0.part_id),
                                 _ => std::cmp::Ordering::Equal,
                             };
@@ -126,17 +126,12 @@ impl App {
                                 ui.add(egui::TextEdit::singleline(&mut notes).desired_width(120.0));
 
                             ui.monospace(
-                                egui::RichText::new(line.part_id.to_string())
-                                    .small()
-                                    .weak(),
+                                egui::RichText::new(line.part_id.to_string()).small().weak(),
                             );
 
-                            let save_clicked = crate::ui::widgets::secondary_button(
-                                ui,
-                                chrome.tokens,
-                                "Save",
-                            )
-                            .clicked();
+                            let save_clicked =
+                                crate::ui::widgets::secondary_button(ui, chrome.tokens, "Save")
+                                    .clicked();
                             if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Del")
                                 .clicked()
                             {
@@ -152,8 +147,7 @@ impl App {
 
                             if save_clicked || qty_resp.lost_focus() || notes_resp.lost_focus() {
                                 let qty_changed = (qty - line.quantity).abs() > f64::EPSILON;
-                                let notes_changed = notes
-                                    != line.notes.clone().unwrap_or_default();
+                                let notes_changed = notes != line.notes.clone().unwrap_or_default();
                                 if save_clicked || qty_changed || notes_changed {
                                     let line_id = line.id;
                                     let notes_ref = if notes.is_empty() {

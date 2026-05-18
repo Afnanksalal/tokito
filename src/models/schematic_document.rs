@@ -292,18 +292,23 @@ impl SchematicDocument {
                         y: GRID * 3.0,
                     });
                 let pin_names = pins_by_ref.remove(&inst.ref_des).unwrap_or_default();
+                let symbol_id = metadata_string(inst, "symbol_id");
+                let value = metadata_string(inst, "value");
+                let footprint_ref = metadata_string(inst, "footprint_ref");
+                let fields = metadata_fields(inst);
+                let mirror = metadata_mirror(inst).unwrap_or_default();
                 DocumentSymbol {
                     id: inst.id.unwrap_or_else(Uuid::new_v4),
                     sheet_id: DEFAULT_SHEET_ID.to_string(),
                     part_id: inst.part_id,
-                    symbol_id: None,
+                    symbol_id,
                     ref_des: inst.ref_des.clone(),
-                    value: None,
+                    value,
                     position,
                     rotation: inst.rotation,
-                    mirror: MirrorMode::None,
-                    fields: BTreeMap::new(),
-                    footprint_ref: None,
+                    mirror,
+                    fields,
+                    footprint_ref,
                     pins: generic_pins(pin_names.into_iter().collect()),
                 }
             })
@@ -779,6 +784,148 @@ fn generic_pins(pin_names: Vec<String>) -> Vec<DocumentPin> {
         .collect()
 }
 
+fn metadata_string(inst: &SchematicInstanceInput, key: &str) -> Option<String> {
+    inst.meta
+        .as_ref()
+        .and_then(|m| m.get(key))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn metadata_fields(inst: &SchematicInstanceInput) -> BTreeMap<String, String> {
+    let Some(obj) = inst
+        .meta
+        .as_ref()
+        .and_then(|m| m.get("fields"))
+        .and_then(|v| v.as_object())
+    else {
+        return BTreeMap::new();
+    };
+    obj.iter()
+        .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+        .collect()
+}
+
+fn metadata_mirror(inst: &SchematicInstanceInput) -> Option<MirrorMode> {
+    let raw = inst
+        .meta
+        .as_ref()
+        .and_then(|m| m.get("mirror"))
+        .and_then(|v| v.as_str())?;
+    match raw {
+        "x" | "X" => Some(MirrorMode::X),
+        "y" | "Y" => Some(MirrorMode::Y),
+        "none" | "None" | "NONE" => Some(MirrorMode::None),
+        _ => None,
+    }
+}
+
+fn upgrade_v1_to_v2(doc: &mut SchematicDocument) {
+    let mut lbl_idx = doc
+        .symbols
+        .iter()
+        .filter(|s| s.ref_des.starts_with("LBL"))
+        .count();
+    for label in &doc.net_labels {
+        if doc.symbols.iter().any(|s| {
+            s.fields
+                .get(NET_LABEL_LINK_FIELD)
+                .map(|v| v == &label.id.to_string())
+                .unwrap_or(false)
+        }) {
+            continue;
+        }
+        lbl_idx += 1;
+        let lib = aux_library_for_label(label.kind);
+        doc.symbols.push(DocumentSymbol {
+            id: Uuid::new_v4(),
+            sheet_id: label.sheet_id.clone(),
+            part_id: None,
+            symbol_id: Some(lib.into()),
+            ref_des: format!("LBL{lbl_idx:04}"),
+            value: Some(label.name.clone()),
+            position: label.position,
+            rotation: orientation_degrees(label.orientation),
+            mirror: MirrorMode::None,
+            fields: BTreeMap::from([(NET_LABEL_LINK_FIELD.to_string(), label.id.to_string())]),
+            footprint_ref: None,
+            pins: vec![aux_attachment_pin()],
+        });
+    }
+
+    let mut pwr_idx = doc
+        .symbols
+        .iter()
+        .filter(|s| s.ref_des.starts_with("PWR"))
+        .count();
+    for pwr in &doc.power_symbols {
+        if doc.symbols.iter().any(|s| {
+            s.fields
+                .get(POWER_SYMBOL_LINK_FIELD)
+                .map(|v| v == &pwr.id.to_string())
+                .unwrap_or(false)
+        }) {
+            continue;
+        }
+        pwr_idx += 1;
+        doc.symbols.push(DocumentSymbol {
+            id: Uuid::new_v4(),
+            sheet_id: pwr.sheet_id.clone(),
+            part_id: None,
+            symbol_id: Some(aux_library_for_power(&pwr.name).into()),
+            ref_des: format!("PWR{pwr_idx:04}"),
+            value: Some(pwr.name.clone()),
+            position: pwr.position,
+            rotation: 0.0,
+            mirror: MirrorMode::None,
+            fields: BTreeMap::from([(POWER_SYMBOL_LINK_FIELD.to_string(), pwr.id.to_string())]),
+            footprint_ref: None,
+            pins: vec![aux_attachment_pin()],
+        });
+    }
+}
+
+fn aux_library_for_label(kind: NetLabelKind) -> &'static str {
+    match kind {
+        NetLabelKind::Global => "aux:Label_Global",
+        NetLabelKind::Hierarchical => "aux:Label_Hierarchical",
+        NetLabelKind::Local | NetLabelKind::NetClassDirective => "aux:Label_Local",
+    }
+}
+
+fn aux_library_for_power(name: &str) -> &'static str {
+    let u = name.to_ascii_uppercase();
+    if u.contains("GND") {
+        "aux:Power_GND"
+    } else if u.contains("3V3") || u.contains("3.3") {
+        "aux:Power_VCC_3V3"
+    } else {
+        "aux:Power_VCC"
+    }
+}
+
+fn orientation_degrees(o: PinOrientation) -> f64 {
+    match o {
+        PinOrientation::Up => 270.0,
+        PinOrientation::Down => 90.0,
+        PinOrientation::Left => 180.0,
+        PinOrientation::Right => 0.0,
+    }
+}
+
+fn aux_attachment_pin() -> DocumentPin {
+    DocumentPin {
+        number: Some("1".into()),
+        name: "1".into(),
+        electrical_type: ElectricalPinType::Passive,
+        offset: DocumentPoint { x: 0.0, y: 0.0 },
+        orientation: PinOrientation::Right,
+        visible: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1149,115 +1296,5 @@ mod tests {
         assert_eq!(back.start_pin.as_ref().unwrap().pin_name, "2");
         assert!(back.end_pin.is_none());
         assert_eq!(back.net_id, seg.net_id);
-    }
-}
-
-fn upgrade_v1_to_v2(doc: &mut SchematicDocument) {
-    let mut lbl_idx = doc
-        .symbols
-        .iter()
-        .filter(|s| s.ref_des.starts_with("LBL"))
-        .count();
-    for label in &doc.net_labels {
-        if doc.symbols.iter().any(|s| {
-            s.fields
-                .get(NET_LABEL_LINK_FIELD)
-                .map(|v| v == &label.id.to_string())
-                .unwrap_or(false)
-        }) {
-            continue;
-        }
-        lbl_idx += 1;
-        let lib = aux_library_for_label(label.kind);
-        doc.symbols.push(DocumentSymbol {
-            id: Uuid::new_v4(),
-            sheet_id: label.sheet_id.clone(),
-            part_id: None,
-            symbol_id: Some(lib.into()),
-            ref_des: format!("LBL{lbl_idx:04}"),
-            value: Some(label.name.clone()),
-            position: label.position,
-            rotation: orientation_degrees(label.orientation),
-            mirror: MirrorMode::None,
-            fields: BTreeMap::from([(
-                NET_LABEL_LINK_FIELD.to_string(),
-                label.id.to_string(),
-            )]),
-            footprint_ref: None,
-            pins: vec![aux_attachment_pin()],
-        });
-    }
-
-    let mut pwr_idx = doc
-        .symbols
-        .iter()
-        .filter(|s| s.ref_des.starts_with("PWR"))
-        .count();
-    for pwr in &doc.power_symbols {
-        if doc.symbols.iter().any(|s| {
-            s.fields
-                .get(POWER_SYMBOL_LINK_FIELD)
-                .map(|v| v == &pwr.id.to_string())
-                .unwrap_or(false)
-        }) {
-            continue;
-        }
-        pwr_idx += 1;
-        doc.symbols.push(DocumentSymbol {
-            id: Uuid::new_v4(),
-            sheet_id: pwr.sheet_id.clone(),
-            part_id: None,
-            symbol_id: Some(aux_library_for_power(&pwr.name).into()),
-            ref_des: format!("PWR{pwr_idx:04}"),
-            value: Some(pwr.name.clone()),
-            position: pwr.position,
-            rotation: 0.0,
-            mirror: MirrorMode::None,
-            fields: BTreeMap::from([(
-                POWER_SYMBOL_LINK_FIELD.to_string(),
-                pwr.id.to_string(),
-            )]),
-            footprint_ref: None,
-            pins: vec![aux_attachment_pin()],
-        });
-    }
-}
-
-fn aux_library_for_label(kind: NetLabelKind) -> &'static str {
-    match kind {
-        NetLabelKind::Global => "aux:Label_Global",
-        NetLabelKind::Hierarchical => "aux:Label_Hierarchical",
-        NetLabelKind::Local | NetLabelKind::NetClassDirective => "aux:Label_Local",
-    }
-}
-
-fn aux_library_for_power(name: &str) -> &'static str {
-    let u = name.to_ascii_uppercase();
-    if u.contains("GND") {
-        "aux:Power_GND"
-    } else if u.contains("3V3") || u.contains("3.3") {
-        "aux:Power_VCC_3V3"
-    } else {
-        "aux:Power_VCC"
-    }
-}
-
-fn orientation_degrees(o: PinOrientation) -> f64 {
-    match o {
-        PinOrientation::Up => 270.0,
-        PinOrientation::Down => 90.0,
-        PinOrientation::Left => 180.0,
-        PinOrientation::Right => 0.0,
-    }
-}
-
-fn aux_attachment_pin() -> DocumentPin {
-    DocumentPin {
-        number: Some("1".into()),
-        name: "1".into(),
-        electrical_type: ElectricalPinType::Passive,
-        offset: DocumentPoint { x: 0.0, y: 0.0 },
-        orientation: PinOrientation::Right,
-        visible: true,
     }
 }

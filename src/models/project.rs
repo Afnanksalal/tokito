@@ -18,6 +18,11 @@ pub struct CreateProject {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PatchProject {
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateResearchNote {
     pub title: Option<String>,
     pub content_text: String,

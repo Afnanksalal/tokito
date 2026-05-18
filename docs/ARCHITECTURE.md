@@ -6,9 +6,9 @@ Tokito is **desktop software**: one window, local data, optional cloud **AI and 
 
 The **Tokito** application bundles:
 
-- **Studio UI** — egui: schematic canvas, docked panels (Build, BOM, 3D preview, research, messages, console).
-- **Design engine** — Shared Rust core: schematic model, validation (ERC), exports, AI pipeline orchestration, SQL data access.
-- **Local database** — PostgreSQL binaries managed in-process (pg-embed). Your designs, parts, BOM, and research artifacts are stored here. Data directory is under the OS app-data path (e.g. `%LOCALAPPDATA%\tokito\` on Windows).
+- **Studio UI**: egui schematic canvas, docked panels (Build, BOM, 3D preview, research, messages, console).
+- **Design engine**: Shared Rust core: schematic model, validation (ERC), exports, AI pipeline orchestration, SQL data access.
+- **Local database**: PostgreSQL binaries managed in-process (pg-embed). Your designs, parts, BOM, and research artifacts are stored here. Data directory is under the OS app-data path (e.g. `%LOCALAPPDATA%\tokito\` on Windows).
 
 There are no extra servers for you to install or containers to run for normal use.
 
@@ -22,14 +22,14 @@ flowchart TB
     DB[(Local PostgreSQL)]
   end
   subgraph external[Optional services you configure]
-    X[xAI]
+    A[AI provider]
     F[Firecrawl]
     N[Nexar]
     L[LCSC]
   end
   UI <--> ENG
   ENG <--> DB
-  ENG --> X
+  ENG --> A
   ENG --> F
   ENG --> N
   ENG --> L
@@ -38,9 +38,9 @@ flowchart TB
 ## AI build flow (simplified)
 
 1. Your prompt becomes structured **intent** stored with the design.
-2. **xAI** proposes research queries and candidate parts; **Firecrawl** pulls web/datasheet context into **research artifacts**.
-3. **xAI** resolves manufacturers, parts, and BOM lines grounded in that research.
-4. **xAI** emits a schematic update; you **review** in the Build panel before applying to the canvas.
+2. The configured **AI provider** proposes research queries and candidate parts; **Firecrawl** pulls web/datasheet context into **research artifacts**.
+3. The configured **AI provider** resolves manufacturers, parts, and BOM lines grounded in that research.
+4. The configured **AI provider** emits a schematic update; you **review** in the Build panel before applying to the canvas.
 
 ```mermaid
 flowchart TD
@@ -53,9 +53,9 @@ flowchart TD
 
 ## Data model (overview)
 
-- **Identity** — local user for single-seat workflows.
-- **Catalog** — manufacturers, parts, offers.
-- **Designs** — metadata, intent, research, schematic tables, JSON document for the editor, BOM lines.
+- **Identity**: local user for single-seat workflows.
+- **Catalog**: manufacturers, parts, offers.
+- **Designs**: metadata, intent, research, schematic tables, JSON document for the editor, BOM lines.
 
 ## Native studio modules (high level)
 

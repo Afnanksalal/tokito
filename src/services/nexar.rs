@@ -113,11 +113,10 @@ fn nexar_offers_from_graphql(data: &Value) -> Vec<UpsertOffer> {
 }
 
 pub async fn access_token(state: &AppState) -> AppResult<String> {
-    let cfg = state.nexar.as_ref().ok_or_else(|| {
-        AppError::Unavailable(
-            crate::user_messages::NEXAR_NOT_CONFIGURED.into(),
-        )
-    })?;
+    let cfg = state
+        .nexar
+        .as_ref()
+        .ok_or_else(|| AppError::Unavailable(crate::user_messages::NEXAR_NOT_CONFIGURED.into()))?;
     let cache = state
         .nexar_token_cache
         .as_ref()

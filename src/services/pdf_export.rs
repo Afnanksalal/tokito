@@ -61,7 +61,12 @@ fn schematic_page_stream(
     for pwr in &doc.power_symbols {
         stream.push_str(&schematic_graphics::power_pdf(pwr, &t));
     }
-    stream.push_str(&schematic_graphics::title_block_pdf(design_name, &t, page_w, page_h));
+    stream.push_str(&schematic_graphics::title_block_pdf(
+        design_name,
+        &t,
+        page_w,
+        page_h,
+    ));
     stream
 }
 
@@ -160,7 +165,7 @@ fn build_pdf_multipage(pages: &[(String, f64, f64)]) -> Vec<u8> {
         ));
         objects.push(format!(
             "{content_id} 0 obj<< /Length {} >>stream\n{stream}endstream\nendobj\n",
-            stream.as_bytes().len(),
+            stream.len(),
             stream = stream
         ));
     }

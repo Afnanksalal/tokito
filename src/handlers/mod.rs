@@ -16,8 +16,7 @@ pub use auth::{create_api_key, delete_api_key, list_api_keys, login, register};
 pub use catalog::search_catalog;
 pub use copilot::{
     create_research_annotation, create_research_note, delete_research_note, get_intent,
-    list_research, patch_research_note,
-    put_intent, scrape_research, search_research,
+    list_research, patch_research_note, put_intent, scrape_research, search_research,
 };
 pub use designs::{
     append_bom, create_design, export_design, get_bom, get_design, get_schematic,
@@ -25,7 +24,7 @@ pub use designs::{
     put_schematic_document, suggest_schematic, validate_schematic_payload,
 };
 pub use health::health;
-pub use integrations::{firecrawl_scrape, firecrawl_search, xai_chat_completions};
+pub use integrations::{ai_chat_completions, firecrawl_scrape, firecrawl_search};
 pub use manufacturers::{create_mfg, list_mfg};
 pub use offers::{list_part_offers, sync_part_offers};
 pub use parts::{create_part, get_part, search_parts};

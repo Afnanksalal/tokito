@@ -6,9 +6,9 @@ use crate::symbols_draw::CompKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum PlaceScope {
-    #[default]
     All,
     Symbols,
+    #[default]
     Parts,
     Catalog,
     Power,
@@ -84,7 +84,7 @@ impl App {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.symbol_import_path)
                             .hint_text("Folder with .tokito_sym / .kicad_sym…")
-                            .desired_width(ui.available_width() - 72.0),
+                            .desired_width((ui.available_width() - 88.0).max(96.0)),
                     );
                     if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Import").clicked() {
                         self.import_symbol_library_folder();
@@ -92,21 +92,6 @@ impl App {
                 });
             });
         ui.add_space(6.0);
-
-        if !self.place_query.trim().is_empty() {
-            match self.place_scope {
-                PlaceScope::Parts | PlaceScope::Catalog | PlaceScope::All => {
-                    let key = format!("{:?}|{}", self.place_scope, self.place_query.trim());
-                    let id = ui.id().with("place_auto_search");
-                    let last = ui.data_mut(|d| d.get_temp::<String>(id));
-                    if last.as_deref() != Some(key.as_str()) {
-                        ui.data_mut(|d| d.insert_temp(id, key));
-                        self.run_place_search();
-                    }
-                }
-                _ => {}
-            }
-        }
 
         egui::ScrollArea::vertical()
             .id_salt("place_panel_scroll")
@@ -521,14 +506,24 @@ fn place_list_row(
         .inner_margin(egui::Margin::symmetric(8.0, 6.0));
     let inner = frame.show(ui, |ui| {
         ui.set_min_height(44.0);
-        ui.horizontal(|ui| {
-            body(ui);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if ui.available_width() < 260.0 {
+            ui.vertical(|ui| {
+                body(ui);
+                ui.add_space(6.0);
                 if crate::ui::widgets::secondary_button(ui, tokens, "Place").clicked() {
                     place = true;
                 }
             });
-        });
+        } else {
+            ui.horizontal(|ui| {
+                body(ui);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if crate::ui::widgets::secondary_button(ui, tokens, "Place").clicked() {
+                        place = true;
+                    }
+                });
+            });
+        }
     });
     let row_rect = inner.response.rect;
     let row_resp = ui.interact(row_rect, row_id, egui::Sense::click());

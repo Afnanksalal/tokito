@@ -14,7 +14,9 @@ pub const KIND_ANNOTATION: &str = "annotation";
 
 fn validate_kind(kind: &str) -> AppResult<()> {
     match kind {
-        KIND_FIRECRAWL_SCRAPE | KIND_FIRECRAWL_SEARCH | KIND_MANUAL_NOTE | KIND_ANNOTATION => Ok(()),
+        KIND_FIRECRAWL_SCRAPE | KIND_FIRECRAWL_SEARCH | KIND_MANUAL_NOTE | KIND_ANNOTATION => {
+            Ok(())
+        }
         _ => Err(AppError::BadRequest(format!(
             "invalid research artifact kind {kind:?}"
         ))),
@@ -180,4 +182,3 @@ pub async fn delete_artifact(pool: &PgPool, artifact_id: Uuid) -> AppResult<()> 
     }
     Ok(())
 }
-

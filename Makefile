@@ -16,9 +16,9 @@ test-db:
 		--test ai_pipeline_fixtures -- --nocapture
 
 lint:
-	cargo clippy --all-targets -- -D warnings
+	cargo clippy --workspace --all-targets -- -D warnings
 
 fmt:
-	cargo fmt --check
+	cargo fmt --all -- --check
 
 check: fmt lint test

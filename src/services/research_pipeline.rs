@@ -117,6 +117,7 @@ pub async fn search_web_into_design(
         ));
     }
     let lim = limit.unwrap_or(5).clamp(1, MAX_SEARCH_RESULTS);
+    account::reserve_scrapes(pool, user_id, lim as i32).await?;
     let body = json!({
         "query": q,
         "limit": lim,
@@ -125,6 +126,7 @@ pub async fn search_web_into_design(
     let resp = firecrawl::search(state, body).await?;
 
     if resp.get("success").and_then(|v| v.as_bool()) == Some(false) {
+        account::refund_scrapes(pool, user_id, lim as i32).await?;
         let msg = resp
             .pointer("/error")
             .or_else(|| resp.get("message"))
@@ -135,16 +137,15 @@ pub async fn search_web_into_design(
 
     let rows = parse_search_results(&resp);
     if rows.is_empty() {
+        account::refund_scrapes(pool, user_id, lim as i32).await?;
         return Err(AppError::BadRequest(
             "Firecrawl search returned no text results (try a different query)".into(),
         ));
     }
+    account::refund_scrapes(pool, user_id, (lim as i32 - rows.len() as i32).max(0)).await?;
 
     let mut artifact_ids = Vec::new();
     for (title, url_opt, text_full) in rows {
-        account::ensure_scrape_quota(pool, user_id).await?;
-        account::record_scrape(pool, user_id).await?;
-
         let (content_text, truncated) = clamp_content(&text_full);
         let meta = json!({
             "firecrawl_search": true,
@@ -185,15 +186,14 @@ pub async fn scrape_urls_into_design(
     }
 
     let mut artifact_ids = Vec::new();
+    account::reserve_scrapes(pool, user_id, urls.len() as i32).await?;
 
     for url in urls {
-        account::ensure_scrape_quota(pool, user_id).await?;
         let body = json!({
             "url": url,
             "formats": ["markdown"],
         });
         let resp = firecrawl::scrape(state, body).await?;
-        account::record_scrape(pool, user_id).await?;
 
         let text_full = firecrawl_response_to_text(&resp);
         let (content_text, truncated) = clamp_content(&text_full);

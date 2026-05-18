@@ -3,7 +3,7 @@
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
 use crate::router::AppState;
-use crate::services::{firecrawl, lcsc, nexar, xai};
+use crate::services::{firecrawl, lcsc, llm, nexar};
 use crate::store::{account, bom, designs, offers, parts};
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -204,14 +204,13 @@ async fn execute_tool(
             if url.trim().is_empty() {
                 return Ok(json!({"error":"missing url"}));
             }
-            account::ensure_scrape_quota(&state.pool, auth.user_id).await?;
+            account::reserve_scrapes(&state.pool, auth.user_id, 1).await?;
             let formats = args
                 .get("formats")
                 .cloned()
                 .unwrap_or_else(|| json!(["markdown"]));
             let body = json!({ "url": url, "formats": formats });
             let res = firecrawl::scrape(state, body).await?;
-            account::record_scrape(&state.pool, auth.user_id).await?;
             Ok(res)
         }
         "sync_part_offers" => {
@@ -262,7 +261,11 @@ async fn execute_tool(
                 .to_string();
             designs::assert_visible(&state.pool, did, auth.user_id).await?;
             let plan = crate::services::design_pipeline::plan_build(
-                state, &state.pool, auth.user_id, did, &prompt,
+                state,
+                &state.pool,
+                auth.user_id,
+                did,
+                &prompt,
             )
             .await?;
             serde_json::to_value(plan).map_err(|e| AppError::Any(e.into()))
@@ -288,7 +291,13 @@ async fn execute_tool(
                     .map_err(|e| AppError::BadRequest(format!("invalid plan: {e}")))?;
             designs::assert_visible(&state.pool, did, auth.user_id).await?;
             let resolved = crate::services::design_pipeline::resolve_bom_parts(
-                state, &state.pool, auth.user_id, did, &prompt, &plan, pages,
+                state,
+                &state.pool,
+                auth.user_id,
+                did,
+                &prompt,
+                &plan,
+                pages,
             )
             .await?;
             serde_json::to_value(resolved).map_err(|e| AppError::Any(e.into()))
@@ -307,7 +316,11 @@ async fn execute_tool(
                 .to_string();
             designs::assert_visible(&state.pool, did, auth.user_id).await?;
             let (schematic, erc) = crate::services::design_pipeline::suggest_schematic_stage(
-                state, &state.pool, auth.user_id, did, &prompt,
+                state,
+                &state.pool,
+                auth.user_id,
+                did,
+                &prompt,
             )
             .await?;
             Ok(json!({ "schematic": schematic, "erc_warnings": erc }))
@@ -433,7 +446,8 @@ pub async fn run(state: &AppState, auth: AuthUser, input: AgentRunInput) -> AppR
             tracing::warn!("agent stopping: token cap hit");
             break;
         }
-        account::ensure_llm_quota(&state.pool, auth.user_id, 8192).await?;
+        let planned_tokens =
+            (state.agent.max_llm_tokens_per_run - total_prompt - total_completion).clamp(1, 8192);
 
         let body = json!({
             "model": model,
@@ -443,22 +457,23 @@ pub async fn run(state: &AppState, auth: AuthUser, input: AgentRunInput) -> AppR
             "stream": false,
         });
 
-        let resp = xai::chat_completion(state, body).await?;
+        let resp =
+            llm::metered_chat_completion(state, &state.pool, auth.user_id, body, planned_tokens)
+                .await?;
         llm_rounds += 1;
-        let (pt, ct) = xai::usage_tokens(&resp);
+        let (pt, ct) = llm::usage_tokens(&resp);
         total_prompt += pt;
         total_completion += ct;
-        account::record_llm_usage(&state.pool, auth.user_id, pt, ct).await?;
 
         let choice = resp
             .get("choices")
             .and_then(|c| c.as_array())
             .and_then(|a| a.first())
-            .ok_or_else(|| AppError::Upstream("xAI response missing choices".into()))?;
+            .ok_or_else(|| AppError::Upstream("AI response missing choices".into()))?;
         let msg = choice
             .pointer("/message")
             .cloned()
-            .ok_or_else(|| AppError::Upstream("xAI response missing message".into()))?;
+            .ok_or_else(|| AppError::Upstream("AI response missing message".into()))?;
 
         if let Some(t) = msg.get("content").and_then(|c| c.as_str()) {
             last_assistant_text = Some(t.to_string());
@@ -536,9 +551,7 @@ pub async fn run(state: &AppState, auth: AuthUser, input: AgentRunInput) -> AppR
     )
     .await?;
 
-    let final_message = summary
-        .clone()
-        .unwrap_or_else(|| "Agent finished.".into());
+    let final_message = summary.clone().unwrap_or_else(|| "Agent finished.".into());
 
     Ok(json!({
         "run_id": run_id,

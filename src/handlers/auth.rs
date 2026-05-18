@@ -8,9 +8,14 @@ use axum::Extension;
 use axum::Json;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use hex;
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
+
+const AUTH_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(300);
+const AUTH_RATE_LIMIT_MAX_ATTEMPTS: usize = 8;
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterBody {
@@ -59,6 +64,7 @@ pub async fn register(
     Json(body): Json<RegisterBody>,
 ) -> AppResult<Json<AuthTokenResponse>> {
     let email = body.email.trim().to_lowercase();
+    enforce_auth_rate_limit(&state, &email)?;
     if email.is_empty() || !email.contains('@') {
         return Err(AppError::BadRequest("valid email required".into()));
     }
@@ -83,6 +89,7 @@ pub async fn login(
     Json(body): Json<LoginBody>,
 ) -> AppResult<Json<AuthTokenResponse>> {
     let email = body.email.trim().to_lowercase();
+    enforce_auth_rate_limit(&state, &email)?;
     let Some(row) = account::find_user_by_email(&state.pool, &email).await? else {
         return Err(AppError::Unauthorized("invalid credentials".into()));
     };
@@ -109,18 +116,42 @@ pub async fn create_api_key(
     if name.is_empty() {
         return Err(AppError::BadRequest("name is required".into()));
     }
-    let secret = Uuid::new_v4().simple().to_string();
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let secret = hex::encode(bytes);
     let full_key = format!("tokito_sk_{secret}");
     let mut hasher = Sha256::new();
     hasher.update(full_key.as_bytes());
     let key_hash = hex::encode(hasher.finalize());
-    let key_hint = secret.chars().take(12).collect::<String>();
+    let key_hint = format!("...{}", &secret[secret.len() - 8..]);
     let id = account::insert_api_key(&state.pool, auth.user_id, name, &key_hash, &key_hint).await?;
     Ok(Json(CreateApiKeyResponse {
         id,
         key: full_key,
         key_hint,
     }))
+}
+
+fn enforce_auth_rate_limit(state: &AppState, key: &str) -> AppResult<()> {
+    let now = Instant::now();
+    let bucket = if key.trim().is_empty() {
+        "<empty>".to_string()
+    } else {
+        key.to_string()
+    };
+    let mut attempts = state
+        .auth_attempts
+        .lock()
+        .map_err(|_| AppError::Any(anyhow::anyhow!("auth rate limiter lock poisoned")))?;
+    let entry = attempts.entry(bucket).or_default();
+    entry.retain(|t| now.duration_since(*t) <= AUTH_RATE_LIMIT_WINDOW);
+    if entry.len() >= AUTH_RATE_LIMIT_MAX_ATTEMPTS {
+        return Err(AppError::Forbidden(
+            "too many auth attempts; try again later".into(),
+        ));
+    }
+    entry.push(now);
+    Ok(())
 }
 
 pub async fn list_api_keys(

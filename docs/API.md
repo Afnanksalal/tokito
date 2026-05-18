@@ -258,7 +258,7 @@ Minimal shape:
 **Body:**
 
 ```json
-{ "prompt": "12 V to 5 V buck, 2 A, …" }
+{ "prompt": "12 V to 5 V buck, 2 A, ..." }
 ```
 
 **Orchestration** (mirrors the **Build** tab in the native app):
@@ -268,33 +268,33 @@ sequenceDiagram
   participant C as Client
   participant T as Tokito
   participant D as Postgres
-  participant X as xAI
+  participant A as AI provider
   participant F as Firecrawl
-  C->>T: POST …/schematic/suggest
+  C->>T: POST /schematic/suggest
   T->>D: upsert design_intents goal_text
-  T->>X: plan queries + candidate MPNs
+  T->>A: plan queries + candidate MPNs
   loop Per planned query
     T->>F: web search / scrape
     F-->>T: excerpts
     T->>D: insert design_research_artifacts
   end
-  T->>X: resolve BOM + schematic
-  X-->>T: manufacturers parts bom_lines
+  T->>A: resolve BOM + schematic
+  A-->>T: manufacturers parts bom_lines
   T->>D: upsert catalog + replace BOM
-  X-->>T: ReplaceSchematic JSON
+  A-->>T: ReplaceSchematic JSON
   T-->>C: schematic + erc_warnings
 ```
 
 **Stages (server-side):**
 
 1. Upsert **intent** with `goal_text` = prompt.
-2. **xAI**: planned Firecrawl queries + candidate parts.
-3. **Firecrawl**: web search per query → **`design_research_artifacts`** (`kind = firecrawl_search`).
-4. **xAI**: resolve manufacturers/parts/qty from excerpts + candidates.
+2. **AI provider**: planned Firecrawl queries + candidate parts.
+3. **Firecrawl**: web search per query -> **`design_research_artifacts`** (`kind = firecrawl_search`).
+4. **AI provider**: resolve manufacturers/parts/qty from excerpts + candidates.
 5. **Postgres**: upsert catalog rows; **replace BOM** with validated `part_id`s.
-6. **xAI**: emit **`ReplaceSchematic`** with **BOM-grounded `part_id`s** (strict mode when BOM non-empty).
+6. **AI provider**: emit **`ReplaceSchematic`** with **BOM-grounded `part_id`s** (strict mode when BOM non-empty).
 
-**Environment:** `TOKITO_XAI_API_KEY` and `TOKITO_FIRECRAWL_API_KEY` must be set on the server. Failures (no ingestible pages, unresolved parts) surface as **400** with a message.
+**Environment:** set `TOKITO_AI_PROVIDER`, `TOKITO_LLM_API_KEY`, and `TOKITO_FIRECRAWL_API_KEY` on the server, or configure the same values in `settings.toml`. Legacy `TOKITO_XAI_API_KEY` remains accepted for xAI setups. Failures (no ingestible pages, unresolved parts) surface as **400** with a message.
 
 **200** body:
 
@@ -309,7 +309,7 @@ sequenceDiagram
 
 ### `POST /v1/designs/:id/schematic/validate`
 
-Same JSON as **`PUT …/schematic`**; **nothing persisted**. Use for editor previews.
+Same JSON as **`PUT /schematic`**; **nothing persisted**. Use for editor previews.
 
 ```json
 {

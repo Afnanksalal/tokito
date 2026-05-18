@@ -93,10 +93,26 @@ async fn search_nexar_catalog(
         .send()
         .await
         .map_err(|e| crate::error::AppError::Any(anyhow::anyhow!("Nexar HTTP: {e}")))?;
-    let v: Value = res
-        .json()
+    let status = res.status();
+    let bytes = res
+        .bytes()
         .await
+        .map_err(|e| crate::error::AppError::Any(anyhow::anyhow!("Nexar bytes: {e}")))?;
+    if !status.is_success() {
+        return Err(crate::error::AppError::Upstream(format!(
+            "Nexar catalog {status}: {}",
+            String::from_utf8_lossy(&bytes)
+        )));
+    }
+    let v: Value = serde_json::from_slice(&bytes)
         .map_err(|e| crate::error::AppError::Any(anyhow::anyhow!("Nexar JSON: {e}")))?;
+    if let Some(errors) = v.get("errors").and_then(|x| x.as_array()) {
+        if !errors.is_empty() {
+            return Err(crate::error::AppError::Upstream(format!(
+                "Nexar GraphQL errors: {errors:?}"
+            )));
+        }
+    }
     Ok(parse_nexar_catalog(&v))
 }
 

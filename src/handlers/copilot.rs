@@ -111,13 +111,7 @@ pub async fn create_research_annotation(
     if parent.design_id != id {
         return Err(AppError::NotFound("parent artifact not found".into()));
     }
-    let row = research::insert_annotation(
-        &state.pool,
-        id,
-        body.parent_artifact_id,
-        text,
-    )
-    .await?;
+    let row = research::insert_annotation(&state.pool, id, body.parent_artifact_id, text).await?;
     Ok(Json(row))
 }
 

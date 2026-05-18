@@ -33,8 +33,7 @@ impl App {
                 self.save_research_note(design_id);
             }
             if self.research_editing_id.is_some()
-                && crate::ui::widgets::secondary_button(ui, chrome.tokens, "Cancel edit")
-                    .clicked()
+                && crate::ui::widgets::secondary_button(ui, chrome.tokens, "Cancel edit").clicked()
             {
                 self.research_editing_id = None;
                 self.research_draft_title.clear();
@@ -136,7 +135,9 @@ impl App {
                                     if let Some(title) = &row.title {
                                         ui.label(egui::RichText::new(title).small());
                                     }
-                                    if !is_manual && kind != tokito::store::research::KIND_ANNOTATION {
+                                    if !is_manual
+                                        && kind != tokito::store::research::KIND_ANNOTATION
+                                    {
                                         if ui.small_button("Annotate").clicked() {
                                             self.research_annotate_parent = Some(id);
                                             self.research_draft_body.clear();
@@ -214,13 +215,7 @@ impl App {
         }
         if let Some(id) = self.research_editing_id {
             let res = self.rt.block_on(async {
-                tokito::store::research::update_manual(
-                    &self.pool,
-                    id,
-                    title.as_deref(),
-                    body,
-                )
-                .await
+                tokito::store::research::update_manual(&self.pool, id, title.as_deref(), body).await
             });
             match res {
                 Ok(_) => {

@@ -1,4 +1,3 @@
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 #[tokio::main]
@@ -22,6 +21,5 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let cfg = tokito::config::load()?;
-    let bind: SocketAddr = cfg.http_addr.parse()?;
-    tokito::server::serve(bind, spa_static_dir).await
+    tokito::server::serve(cfg, spa_static_dir).await
 }

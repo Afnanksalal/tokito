@@ -1,13 +1,19 @@
 # Build a portable Windows folder: double-click Tokito.exe (no shell required).
 # Requires: Rust 1.88+, MSVC build tools.
 
+param(
+    [switch]$SkipBuild
+)
+
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
-Write-Host "Building release binary..."
-cargo build --release -p tokito-native
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+if (-not $SkipBuild) {
+    Write-Host "Building release binary..."
+    cargo build --release -p tokito-native
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
 
 $Out = Join-Path $Root "dist\Tokito"
 if (Test-Path $Out) { Remove-Item -Recurse -Force $Out }

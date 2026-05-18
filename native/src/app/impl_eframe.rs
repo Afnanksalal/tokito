@@ -1,6 +1,6 @@
 impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.log_console("Shutting down database…".to_string());
+        self.log_console("Shutting down database...".to_string());
         self.shutdown_database();
     }
 
@@ -31,8 +31,8 @@ impl eframe::App for App {
             .frame(egui::Frame::none().fill(tokens.bg_panel))
             .show(ctx, |ui| {
                 ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 16.0;
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(10.0, 6.0);
                     ui.label(
                         egui::RichText::new("Tokito")
                             .strong()
@@ -51,7 +51,9 @@ impl eframe::App for App {
                         Route::Studio { design_id } => {
                             if let Some(d) = &self.design {
                                 ui.label(
-                                    egui::RichText::new(&d.name)
+                                    egui::RichText::new(crate::util::truncate_ui_chars(
+                                        &d.name, 36,
+                                    ))
                                         .strong()
                                         .color(tokens.text_primary),
                                 );
@@ -65,7 +67,7 @@ impl eframe::App for App {
                             }
                             if self.studio_dirty {
                                 ui.label(
-                                    egui::RichText::new("● Unsaved")
+                                    egui::RichText::new("Unsaved")
                                         .small()
                                         .color(tokens.warning),
                                 );
@@ -111,11 +113,39 @@ impl eframe::App for App {
                             }
                             ui.menu_button("Panels", |ui| {
                                 use crate::app::studio_dock::{ensure_tab_visible, StudioTab};
-                                for tab in StudioTab::DOCK_TABS {
-                                    if ui.button(tab.panel_label()).clicked() {
-                                        ensure_tab_visible(&mut self.dock_state, tab);
-                                        ui.close_menu();
-                                    }
+                                ui.set_min_width(220.0);
+                                if ui
+                                    .selectable_label(self.properties_panel_open, "Properties")
+                                    .clicked()
+                                {
+                                    self.properties_panel_open = !self.properties_panel_open;
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                egui::ScrollArea::vertical()
+                                    .max_height(320.0)
+                                    .show(ui, |ui| {
+                                        for tab in StudioTab::ADDABLE_TABS {
+                                            let open = self.dock_state.find_tab(&tab).is_some();
+                                            if ui
+                                                .selectable_label(open, tab.panel_label())
+                                                .clicked()
+                                            {
+                                                ensure_tab_visible(&mut self.dock_state, tab);
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    });
+                                ui.separator();
+                                if ui.button("Reset workspace layout").clicked() {
+                                    self.dock_state =
+                                        crate::app::studio_dock::default_studio_dock();
+                                    self.properties_panel_open = false;
+                                    ui.close_menu();
+                                }
+                                if ui.button("Schematic").clicked() {
+                                    ensure_tab_visible(&mut self.dock_state, StudioTab::Canvas);
+                                    ui.close_menu();
                                 }
                             });
                             if crate::ui::widgets::secondary_button(ui, &tokens, "Undo").clicked() {
@@ -125,7 +155,7 @@ impl eframe::App for App {
                                 self.redo_canvas();
                             }
                             if ui
-                                .add(egui::Button::new("← Projects").fill(tokens.bg_elevated))
+                                .add(egui::Button::new("Projects").fill(tokens.bg_elevated))
                                 .clicked()
                             {
                                 self.editor.clear_history();

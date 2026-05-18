@@ -34,27 +34,27 @@ pub fn tokens_for(theme: &str) -> UiTokens {
     let theme = effective_theme(theme);
     match theme.as_str() {
         "dark" => UiTokens {
-            bg_app: Color32::from_rgb(28, 30, 34),
-            bg_panel: Color32::from_rgb(38, 42, 48),
-            bg_elevated: Color32::from_rgb(48, 52, 58),
-            bg_canvas: Color32::from_rgb(44, 48, 54),
-            bg_hover: Color32::from_rgb(56, 62, 72),
-            bg_chip_selected: Color32::from_rgb(64, 78, 98),
-            stroke_subtle: Stroke::new(1.0, Color32::from_rgb(72, 78, 88)),
-            stroke_focus: Stroke::new(1.5, Color32::from_rgb(96, 168, 220)),
-            accent: Color32::from_rgb(96, 168, 220),
-            accent_dim: Color32::from_rgba_unmultiplied(96, 168, 220, 48),
-            text_primary: Color32::from_rgb(232, 234, 238),
-            text_secondary: Color32::from_rgb(188, 194, 204),
-            text_muted: Color32::from_rgb(132, 140, 152),
-            danger: Color32::from_rgb(220, 90, 90),
-            warning: Color32::from_rgb(220, 160, 72),
+            bg_app: Color32::from_rgb(19, 22, 26),
+            bg_panel: Color32::from_rgb(27, 31, 36),
+            bg_elevated: Color32::from_rgb(35, 40, 47),
+            bg_canvas: Color32::from_rgb(32, 37, 43),
+            bg_hover: Color32::from_rgb(43, 50, 58),
+            bg_chip_selected: Color32::from_rgb(28, 66, 61),
+            stroke_subtle: Stroke::new(1.0, Color32::from_rgb(62, 70, 80)),
+            stroke_focus: Stroke::new(1.5, Color32::from_rgb(55, 172, 152)),
+            accent: Color32::from_rgb(55, 172, 152),
+            accent_dim: Color32::from_rgba_unmultiplied(55, 172, 152, 52),
+            text_primary: Color32::from_rgb(238, 241, 245),
+            text_secondary: Color32::from_rgb(196, 204, 214),
+            text_muted: Color32::from_rgb(139, 150, 164),
+            danger: Color32::from_rgb(238, 92, 104),
+            warning: Color32::from_rgb(226, 164, 70),
             spacing_xs: 4.0,
-            spacing_sm: 8.0,
-            spacing_md: 12.0,
-            radius_sm: Rounding::same(3.0),
-            radius_md: Rounding::same(6.0),
-            margin_panel: egui::Margin::symmetric(10.0, 8.0),
+            spacing_sm: 10.0,
+            spacing_md: 16.0,
+            radius_sm: Rounding::same(6.0),
+            radius_md: Rounding::same(8.0),
+            margin_panel: egui::Margin::symmetric(14.0, 12.0),
             sym_ink: Color32::from_rgb(228, 232, 238),
             sym_ink_hover: Color32::from_rgb(160, 200, 240),
             sym_ink_selected: Color32::from_rgb(255, 255, 255),
@@ -64,7 +64,7 @@ pub fn tokens_for(theme: &str) -> UiTokens {
             canvas_grid_major: Color32::from_rgba_unmultiplied(100, 108, 120, 64),
             canvas_frame: Color32::from_rgb(88, 94, 104),
             wire: Color32::from_rgb(120, 180, 220),
-            wire_highlight: Color32::from_rgb(160, 210, 255),
+            wire_highlight: Color32::from_rgb(55, 172, 152),
             wire_selected: Color32::from_rgb(240, 180, 80),
             label_ink: Color32::from_rgb(180, 220, 255),
             refdes_ink: Color32::from_rgb(200, 204, 212),
@@ -101,14 +101,14 @@ fn apply_tokens(ctx: &egui::Context, t: &UiTokens, theme: &str) {
     visuals.selection.bg_fill = t.accent_dim;
     visuals.selection.stroke = Stroke::new(1.0, t.accent);
     visuals.window_rounding = t.radius_md;
-    visuals.menu_rounding = Rounding::same(6.0);
+    visuals.menu_rounding = t.radius_sm;
     visuals.window_shadow = egui::epaint::Shadow::NONE;
     ctx.set_visuals(visuals);
     let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(10.0, 5.0);
-    style.spacing.window_margin = egui::Margin::same(8.0);
-    style.spacing.indent = 14.0;
+    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+    style.spacing.button_padding = egui::vec2(12.0, 7.0);
+    style.spacing.window_margin = egui::Margin::same(10.0);
+    style.spacing.indent = 16.0;
     ctx.set_style(style);
 }
 

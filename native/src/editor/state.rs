@@ -473,13 +473,7 @@ impl SchematicEditor {
             return None;
         }
         let origin = rect.min;
-        let i = pick_wire_segment(
-            pointer,
-            origin,
-            &self.viewport,
-            &self.wire_segments,
-            14.0,
-        )?;
+        let i = pick_wire_segment(pointer, origin, &self.viewport, &self.wire_segments, 14.0)?;
         let net = self.wire_segments.get(i)?.net.trim();
         if net.is_empty() {
             None
@@ -723,7 +717,7 @@ impl SchematicEditor {
         }
     }
 
-    pub fn delete_selected(&mut self) {
+    pub fn delete_selected(&mut self) -> bool {
         if !self.selected_syms.is_empty() {
             self.before_edit();
             let refs: Vec<_> = self.selected_syms.iter().cloned().collect();
@@ -739,7 +733,8 @@ impl SchematicEditor {
                 })
             });
             self.clear_selection();
-            return;
+            self.refresh_wire_connectivity();
+            return true;
         }
         if !self.selected_segments.is_empty() {
             self.before_edit();
@@ -752,49 +747,58 @@ impl SchematicEditor {
                 .map(|(_, s)| s.clone())
                 .collect();
             self.clear_selection();
-            return;
+            self.refresh_wire_connectivity();
+            return true;
         }
         if let Some(i) = self.selected_net_label.take() {
             self.before_edit();
             if i < self.net_labels.len() {
                 self.net_labels.remove(i);
             }
-            return;
+            self.refresh_wire_connectivity();
+            return true;
         }
         if let Some(i) = self.selected_junction.take() {
             self.before_edit();
             if i < self.junctions.len() {
                 self.junctions.remove(i);
             }
-            return;
+            self.refresh_wire_connectivity();
+            return true;
         }
         if let Some(i) = self.selected_no_connect.take() {
             self.before_edit();
             if i < self.no_connects.len() {
                 self.no_connects.remove(i);
             }
-            return;
+            self.refresh_wire_connectivity();
+            return true;
         }
         if let Some(i) = self.selected_power_symbol.take() {
             self.before_edit();
             if i < self.power_symbols.len() {
                 self.power_symbols.remove(i);
             }
-            return;
+            self.refresh_wire_connectivity();
+            return true;
         }
         if let Some(i) = self.selected_text_item.take() {
             self.before_edit();
             if i < self.text_items.len() {
                 self.text_items.remove(i);
             }
-            return;
+            self.refresh_wire_connectivity();
+            return true;
         }
         if let Some(i) = self.selected_bus.take() {
             self.before_edit();
             if i < self.buses.len() {
                 self.buses.remove(i);
             }
+            self.refresh_wire_connectivity();
+            return true;
         }
+        false
     }
 
     pub fn reset_view(&mut self) {

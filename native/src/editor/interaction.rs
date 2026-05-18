@@ -310,10 +310,8 @@ pub fn handle(
                 CanvasTool::NetLabel => {
                     editor.before_edit();
                     let name = editor.new_wire_net.trim();
-                    let rot = super::label_placement::wire_aligned_rotation(
-                        world,
-                        &editor.wire_segments,
-                    );
+                    let rot =
+                        super::label_placement::wire_aligned_rotation(world, &editor.wire_segments);
                     editor.net_labels.push(crate::canvas::NetLabel {
                         name: if name.is_empty() {
                             "NET".to_string()

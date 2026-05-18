@@ -1,7 +1,6 @@
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    ReplaceSchematic, SchematicDocument, SchematicInstance, SchematicNet, SchematicPin,
-    SchematicView,
+    ReplaceSchematic, SchematicInstance, SchematicNet, SchematicPin, SchematicView,
 };
 use serde_json::json;
 use sqlx::PgPool;
@@ -50,7 +49,12 @@ pub async fn get_view(pool: &PgPool, design_id: Uuid) -> AppResult<SchematicView
     })
 }
 
-/// Replaces schematic graph for a design in one transaction.
+/// Replaces only the normalized schematic graph for a design.
+///
+/// Rich schematic documents are persisted separately through
+/// `store::schematic_document`. Keeping these writes separate prevents graph
+/// compatibility saves from destroying document-only data such as symbol
+/// fields, pin layout, sheets, text, and ERC markers.
 pub async fn replace(pool: &PgPool, design_id: Uuid, body: ReplaceSchematic) -> AppResult<()> {
     crate::services::schematic_validate::validate_topology(&body)?;
     let mut tx = pool.begin().await?;
@@ -74,7 +78,7 @@ pub async fn replace(pool: &PgPool, design_id: Uuid, body: ReplaceSchematic) -> 
     let mut ref_to_id: HashMap<String, Uuid> = HashMap::new();
 
     for inst in &body.instances {
-        let id = Uuid::new_v4();
+        let id = inst.id.unwrap_or_else(Uuid::new_v4);
         let meta = inst.meta.clone().unwrap_or_else(|| json!({}));
         let (px, py) = match &inst.position {
             Some(p) => (Some(p.x), Some(p.y)),
@@ -112,7 +116,7 @@ pub async fn replace(pool: &PgPool, design_id: Uuid, body: ReplaceSchematic) -> 
 
     let mut net_name_to_id: HashMap<String, Uuid> = HashMap::new();
     for net in &body.nets {
-        let id = Uuid::new_v4();
+        let id = net.id.unwrap_or_else(Uuid::new_v4);
         sqlx::query(r#"INSERT INTO schematic_nets (id, design_id, name) VALUES ($1, $2, $3)"#)
             .bind(id)
             .bind(design_id)
@@ -159,9 +163,5 @@ pub async fn replace(pool: &PgPool, design_id: Uuid, body: ReplaceSchematic) -> 
         })?;
     }
 
-    tx.commit().await?;
-
-    let document = SchematicDocument::from_replace_schematic(&body);
-    crate::store::schematic_document::upsert(pool, design_id, &document).await?;
-    Ok(())
+    tx.commit().await.map_err(Into::into)
 }

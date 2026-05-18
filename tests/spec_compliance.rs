@@ -1,10 +1,10 @@
 //! Product regression tests (config, exports, BOM, document schema).
 
 use tokito::config_provider::{default_provider, ConfigProvider, FileSettingsProvider};
+use tokito::models::{DocumentPoint, DocumentWireSegment, SchematicDocument};
 use tokito::services::bom_sync;
 use tokito::services::pdf_export;
 use tokito::services::svg_export;
-use tokito::models::{DocumentPoint, DocumentWireSegment, SchematicDocument};
 
 #[test]
 fn config_provider_roundtrip() {

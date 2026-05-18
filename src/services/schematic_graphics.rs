@@ -184,17 +184,28 @@ pub fn power_svg(pwr: &DocumentPowerSymbol, t: &PlotTransform) -> String {
             "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#22885a\"/>\n\
 <line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#22885a\"/>\n\
 <text class=\"label\" x=\"{:.1}\" y=\"{:.1}\">{name}</text>\n",
-            p.0, p.1, p.0, p.1 + 10.0,
-            p.0 - 10.0, p.1 + 10.0, p.0 + 10.0, p.1 + 10.0,
-            p.0 + 12.0, p.1 + 8.0,
+            p.0,
+            p.1,
+            p.0,
+            p.1 + 10.0,
+            p.0 - 10.0,
+            p.1 + 10.0,
+            p.0 + 10.0,
+            p.1 + 10.0,
+            p.0 + 12.0,
+            p.1 + 8.0,
             name = xml_escape(&pwr.name)
         )
     } else {
         format!(
             "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#22885a\"/>\n\
 <text class=\"label\" x=\"{:.1}\" y=\"{:.1}\">{name}</text>\n",
-            p.0, p.1, p.0, p.1 + 14.0,
-            p.0, p.1 - 4.0,
+            p.0,
+            p.1,
+            p.0,
+            p.1 + 14.0,
+            p.0,
+            p.1 - 4.0,
             name = xml_escape(&pwr.name)
         )
     }
@@ -207,7 +218,14 @@ pub fn label_pdf(label: &DocumentNetLabel, t: &PlotTransform) -> String {
         NetLabelKind::Global => {
             s.push_str(&format!(
                 "{:.2} {:.2} m {:.2} {:.2} l {:.2} {:.2} l {:.2} {:.2} l S\n",
-                p.0, p.1, p.0 - 14.0, p.1 - 6.0, p.0 - 14.0, p.1 + 6.0, p.0, p.1
+                p.0,
+                p.1,
+                p.0 - 14.0,
+                p.1 - 6.0,
+                p.0 - 14.0,
+                p.1 + 6.0,
+                p.0,
+                p.1
             ));
         }
         NetLabelKind::Hierarchical => {
@@ -228,7 +246,14 @@ pub fn label_pdf(label: &DocumentNetLabel, t: &PlotTransform) -> String {
         _ => {
             s.push_str(&format!(
                 "{:.2} {:.2} m {:.2} {:.2} l {:.2} {:.2} l {:.2} {:.2} l S\n",
-                p.0, p.1, p.0 - 18.0, p.1 - 8.0, p.0 - 18.0, p.1, p.0, p.1
+                p.0,
+                p.1,
+                p.0 - 18.0,
+                p.1 - 8.0,
+                p.0 - 18.0,
+                p.1,
+                p.0,
+                p.1
             ));
         }
     }
@@ -248,12 +273,22 @@ pub fn power_pdf(pwr: &DocumentPowerSymbol, t: &PlotTransform) -> String {
     if lower.contains("gnd") {
         s.push_str(&format!(
             "{:.2} {:.2} m {:.2} {:.2} l S\n{:.2} {:.2} m {:.2} {:.2} l S\n",
-            p.0, p.1, p.0, p.1 + 10.0, p.0 - 10.0, p.1 + 10.0, p.0 + 10.0, p.1 + 10.0
+            p.0,
+            p.1,
+            p.0,
+            p.1 + 10.0,
+            p.0 - 10.0,
+            p.1 + 10.0,
+            p.0 + 10.0,
+            p.1 + 10.0
         ));
     } else {
         s.push_str(&format!(
             "{:.2} {:.2} m {:.2} {:.2} l S\n",
-            p.0, p.1, p.0, p.1 + 14.0
+            p.0,
+            p.1,
+            p.0,
+            p.1 + 14.0
         ));
     }
     s.push_str(&format!(

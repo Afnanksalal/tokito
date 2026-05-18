@@ -1,4 +1,4 @@
-//! Design system — tokens, typography, layout, widgets, icons.
+//! Design system: tokens, typography, layout, widgets, icons.
 pub mod icons;
 pub mod layout;
 pub mod table;

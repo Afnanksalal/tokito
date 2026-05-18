@@ -49,7 +49,10 @@ pub fn propose_fixes(doc: &SchematicDocument, violations: &[ErcViolation]) -> Sc
                             ops.push(SchematicEditOp::ConnectPins {
                                 net_name: net.clone(),
                                 pins: vec![(sym.ref_des.clone(), "1".into())],
-                                summary: format!("Connect label {net} to {}/1 (review)", sym.ref_des),
+                                summary: format!(
+                                    "Connect label {net} to {}/1 (review)",
+                                    sym.ref_des
+                                ),
                             });
                             op_provenance.push(EditProvenance::ErcFix {
                                 code: v.code.clone(),

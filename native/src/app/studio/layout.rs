@@ -14,10 +14,14 @@ impl App {
         const TOOLBAR_W: f32 = 52.0;
         let screen_w = ctx.screen_rect().width();
         let sides_budget = (screen_w - TOOLBAR_W - CENTER_MIN).max(0.0);
-        let side_w = if self.canvas_focus_mode {
+        let show_place_panel = !self.canvas_focus_mode && sides_budget >= 220.0;
+        let show_properties_panel =
+            show_place_panel && self.properties_panel_open && sides_budget >= 460.0;
+        let side_count = usize::from(show_place_panel) + usize::from(show_properties_panel);
+        let side_w = if side_count == 0 {
             0.0
         } else {
-            (sides_budget / 2.0).clamp(220.0, 340.0)
+            (sides_budget / side_count as f32).clamp(220.0, 320.0)
         };
 
         // CAD tool rail (leftmost)
@@ -29,7 +33,7 @@ impl App {
                 self.render_cad_toolbar(ui, &tokens);
             });
 
-        if !self.canvas_focus_mode && side_w > 0.0 {
+        if show_place_panel && side_w > 0.0 {
             egui::SidePanel::left("place_panel")
                 .resizable(true)
                 .default_width(side_w)
@@ -38,7 +42,9 @@ impl App {
                 .show(ctx, |ui| {
                     self.render_studio_place_panel(ui);
                 });
+        }
 
+        if show_properties_panel && side_w > 0.0 {
             egui::SidePanel::right("properties_panel")
                 .resizable(true)
                 .default_width(side_w)
@@ -55,16 +61,15 @@ impl App {
             .frame(egui::Frame::none().fill(tokens.bg_panel))
             .exact_height(26.0)
             .show(ctx, |ui| {
-                ui.horizontal_centered(|ui| {
+                ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 12.0;
+                    let compact = ui.available_width() < 900.0;
                     let cursor = self
                         .editor
                         .cursor_world
                         .map(|p| format!("{:.0}, {:.0}", p.x, p.y))
-                        .unwrap_or_else(|| "—, —".into());
-                    let net_label = net_hover
-                        .as_deref()
-                        .unwrap_or("—");
+                        .unwrap_or_else(|| "-, -".into());
+                    let net_label = net_hover.as_deref().unwrap_or("-");
                     ui.label(
                         egui::RichText::new(format!(
                             "X/Y {}   Net {}   Zoom {:.0}%   {}",
@@ -76,14 +81,16 @@ impl App {
                         .small()
                         .color(tokens.text_secondary),
                     );
-                    if matches!(self.editor.tool, CanvasTool::Select) {
+                    if !compact && matches!(self.editor.tool, CanvasTool::Select) {
                         ui.label(
-                            egui::RichText::new("Drag marquee · Space+drag pan · MMB pan")
+                            egui::RichText::new("Drag marquee | Space+drag pan | MMB pan")
                                 .small()
                                 .color(tokens.text_muted),
                         );
                     }
-                    ui.separator();
+                    if !compact {
+                        ui.separator();
+                    }
                     let sel = if self.editor.wire_drag_from.is_some() {
                         "wiring".to_string()
                     } else {
@@ -94,26 +101,39 @@ impl App {
                             format!("{n} selected")
                         }
                     };
-                    if ui
-                        .small_button(format!("Filter: {}", self.editor.selection_filter.label()))
-                        .on_hover_text("Click to cycle selection filter")
-                        .clicked()
-                    {
-                        self.editor.selection_filter = self.editor.selection_filter.cycle();
+                    if !compact {
+                        if ui
+                            .small_button(format!(
+                                "Filter: {}",
+                                self.editor.selection_filter.label()
+                            ))
+                            .on_hover_text("Click to cycle selection filter")
+                            .clicked()
+                        {
+                            self.editor.selection_filter = self.editor.selection_filter.cycle();
+                        }
                     }
                     ui.label(
                         egui::RichText::new(format!("Selection: {sel}"))
                             .small()
                             .color(tokens.text_muted),
                     );
-                    ui.separator();
-                    ui.label(egui::RichText::new("Net").small().color(tokens.text_muted));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.editor.new_wire_net)
-                            .desired_width(88.0)
-                            .hint_text("NET"),
-                    );
-                    if ui
+                    if !compact {
+                        ui.separator();
+                        ui.label(egui::RichText::new("Net").small().color(tokens.text_muted));
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.editor.new_wire_net)
+                                .desired_width(88.0)
+                                .hint_text("NET"),
+                        );
+                        if ui
+                            .small_button("Fit")
+                            .on_hover_text("Zoom to fit (Home)")
+                            .clicked()
+                        {
+                            self.editor.request_zoom_fit();
+                        }
+                    } else if ui
                         .small_button("Fit")
                         .on_hover_text("Zoom to fit (Home)")
                         .clicked()
@@ -122,7 +142,7 @@ impl App {
                     }
                     if self.studio_dirty {
                         ui.label(
-                            egui::RichText::new("● Modified")
+                            egui::RichText::new("Modified")
                                 .small()
                                 .color(tokens.warning),
                         );

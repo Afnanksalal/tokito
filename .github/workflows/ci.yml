@@ -5,15 +5,36 @@ on:
     branches: ["main", "master"]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
   rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install native Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libx11-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libwayland-dev
 
       - uses: dtolnay/rust-toolchain@1.88
         with:
@@ -22,20 +43,23 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Check lockfile and workspace
+        run: cargo check --workspace --locked
+
       - name: Format
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
       - name: Unit tests
-        run: cargo test -p tokito -p tokito-native
+        run: cargo test --workspace --locked
 
       - name: Integration tests
         env:
           TOKITO_RUN_DB_INTEGRATION: "1"
         run: |
-          cargo test -p tokito \
+          cargo test --locked -p tokito \
             --test api_designs --test api_parts --test api_schematic \
             --test golden_document --test golden_netlist_move \
             --test services_exports --test spec_compliance \

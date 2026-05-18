@@ -1,4 +1,4 @@
-//! Messages / ERC panel — navigable violations.
+//! Messages / ERC panel with navigable violations.
 
 use crate::app::studio::chrome::TabChrome;
 use crate::app::App;
@@ -11,7 +11,7 @@ impl App {
         chrome.header(
             ui,
             "ERC / Messages",
-            Some("Electrical rule check — click a row to jump on the schematic"),
+            Some("Electrical rule check. Click a row to jump on the schematic"),
         );
 
         ui.horizontal(|ui| {
@@ -60,7 +60,6 @@ impl App {
             .clone()
             .into_iter()
             .enumerate()
-            .map(|(i, v)| (i, v))
             .collect();
         indexed.sort_by(|a, b| {
             if self.erc_sort.dir == crate::ui::table::SortDir::None {

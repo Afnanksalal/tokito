@@ -16,7 +16,7 @@ pub fn write_design_backup(
     view: &SchematicView,
     bom_csv: &str,
 ) -> AppResult<PathBuf> {
-    write_design_backup_inner(workspace, design_name, document, view, bom_csv, None)
+    write_design_backup_inner(workspace, design_name, document, view, bom_csv)
 }
 
 /// Optional cluster dump when caller provides DB URL (global or project embedded).
@@ -29,8 +29,36 @@ pub fn write_design_backup_with_db(
     database_url: Option<&str>,
     pg_embed_version: u16,
 ) -> AppResult<PathBuf> {
-    let pg = database_url.map(|u| (u.to_string(), pg_embed_version));
-    write_design_backup_inner(workspace, design_name, document, view, bom_csv, pg)
+    let dir = write_design_backup_inner(workspace, design_name, document, view, bom_csv)?;
+    if database_url.is_some() {
+        tracing::warn!(
+            "database dump skipped by synchronous backup API; use write_design_backup_with_db_async"
+        );
+        let _ = pg_embed_version;
+    }
+    Ok(dir)
+}
+
+/// Write a design backup and include a best-effort database dump.
+pub async fn write_design_backup_with_db_async(
+    workspace: &Path,
+    design_name: &str,
+    document: &SchematicDocument,
+    view: &SchematicView,
+    bom_csv: &str,
+    database_url: Option<&str>,
+    pg_embed_version: u16,
+) -> AppResult<PathBuf> {
+    let dir = write_design_backup_inner(workspace, design_name, document, view, bom_csv)?;
+    if let Some(url) = database_url {
+        let sql_path = dir.join("database.sql");
+        if let Err(e) =
+            crate::db::pg_backup::pg_dump_to_file(url, &sql_path, pg_embed_version).await
+        {
+            tracing::warn!(%e, "pg_dump skipped for design backup");
+        }
+    }
+    Ok(dir)
 }
 
 fn write_design_backup_inner(
@@ -39,7 +67,6 @@ fn write_design_backup_inner(
     document: &SchematicDocument,
     view: &SchematicView,
     bom_csv: &str,
-    pg_dump_context: Option<(String, u16)>,
 ) -> AppResult<PathBuf> {
     let ts = Utc::now().format("%Y%m%d_%H%M%S");
     let safe: String = design_name
@@ -57,17 +84,6 @@ fn write_design_backup_inner(
         Some(&mcad),
     )
     .map_err(|e| AppError::Any(e.into()))?;
-
-    if let Some((url, pg_version)) = pg_dump_context {
-        let sql_path = dir.join("database.sql");
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            if let Err(e) = handle.block_on(crate::db::pg_backup::pg_dump_to_file(
-                &url, &sql_path, pg_version,
-            )) {
-                tracing::warn!(%e, "pg_dump skipped for design backup");
-            }
-        }
-    }
 
     Ok(dir)
 }
