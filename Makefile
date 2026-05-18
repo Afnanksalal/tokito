@@ -8,7 +8,12 @@ test:
 
 # Requires pg-embed binary download/extract (network)
 test-db:
-	TOKITO_RUN_DB_INTEGRATION=1 cargo test -p tokito --test api_designs --test api_parts --test api_schematic -- --nocapture
+	TOKITO_RUN_DB_INTEGRATION=1 cargo test -p tokito \
+		--test api_designs --test api_parts --test api_schematic \
+		--test golden_document --test golden_netlist_move \
+		--test services_exports --test spec_compliance \
+		--test db_stability --test notes_research --test project_workspace \
+		--test ai_pipeline_fixtures -- --nocapture
 
 lint:
 	cargo clippy --all-targets -- -D warnings

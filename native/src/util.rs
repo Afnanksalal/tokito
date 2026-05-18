@@ -59,3 +59,25 @@ pub fn next_refdes(symbols: &[Sym], prefix: &str) -> String {
     }
     format!("{prefix}{}", max + 1)
 }
+
+pub fn reveal_in_folder(path: &std::path::Path) {
+    use std::process::Command;
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(target_os = "windows")]
+    {
+        let _ = Command::new("explorer")
+            .arg("/select,")
+            .arg(path.as_os_str())
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("open").arg("-R").arg(&path).spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(parent) = path.parent() {
+            let _ = Command::new("xdg-open").arg(parent).spawn();
+        }
+    }
+}

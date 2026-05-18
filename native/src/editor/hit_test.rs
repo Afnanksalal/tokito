@@ -117,9 +117,10 @@ pub fn pick_net_label(
 ) -> Option<usize> {
     for (i, label) in labels.iter().enumerate() {
         let p = viewport.world_to_screen(origin, label.pos);
-        let width = (label.name.len() as f32 * 8.0).max(24.0);
-        if Rect::from_min_size(p + Vec2::new(4.0, -16.0), Vec2::new(width, 22.0)).contains(pointer)
-        {
+        let hw = 32.0_f32;
+        let hh = 24.0_f32;
+        let rect = Rect::from_center_size(p, Vec2::new(hw * 2.0, hh * 2.0));
+        if rect.contains(pointer) {
             return Some(i);
         }
     }

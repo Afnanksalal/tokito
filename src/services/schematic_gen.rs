@@ -12,10 +12,6 @@ use sqlx::PgPool;
 use std::collections::HashSet;
 use uuid::Uuid;
 
-fn truncate_chars(s: &str, max: usize) -> String {
-    s.chars().take(max).collect()
-}
-
 async fn assemble_grounding_context(
     pool: &PgPool,
     design_id: Uuid,
@@ -46,26 +42,24 @@ async fn assemble_grounding_context(
         None => json!({ "goal_text": "", "constraints": {} }),
     };
 
-    let artifacts = research::list_for_design(pool, design_id, 16).await?;
-    let excerpts: Vec<Value> = artifacts
+    let artifacts = research::list_for_design(pool, design_id, 48).await?;
+    let mpn_hints: Vec<&str> = bom
         .iter()
-        .map(|a| {
-            json!({
-                "kind": &a.kind,
-                "source_url": &a.source_url,
-                "title": &a.title,
-                "excerpt": truncate_chars(&a.content_text, 8000),
-                "created_at": a.created_at,
-            })
-        })
+        .filter_map(|l| parts_map.get(&l.part_id).map(|p| p.mpn.as_str()))
         .collect();
+    let excerpts = crate::services::research_retrieval::excerpts_for_prompt(
+        &artifacts,
+        user_prompt,
+        &mpn_hints,
+        32_000,
+    );
 
     Ok(json!({
         "design_name": design.name,
         "design_description": design.description,
         "build_intent": intent_json,
         "bom_lines": bom_enriched,
-        "research_excerpts_newest_first": excerpts,
+        "research_excerpts_ranked": excerpts,
         "user_request": user_prompt,
     }))
 }

@@ -244,4 +244,22 @@ mod tests {
         assert_eq!(segs[0].net_id, segs[1].net_id);
         assert_eq!(segs[0].net, segs[1].net);
     }
+
+    #[test]
+    fn bus_segment_unifies_with_touching_wire() {
+        use crate::canvas::BusSegment;
+        let symbols: Vec<Sym> = vec![];
+        let mut segs = vec![WireSegment::new(
+            Pos2::new(0.0, 0.0),
+            Pos2::new(40.0, 0.0),
+            "NET_A",
+        )];
+        let buses = vec![BusSegment {
+            name: Some("VCC".into()),
+            start: Pos2::new(40.0, 0.0),
+            end: Pos2::new(120.0, 0.0),
+        }];
+        refresh_connectivity(&symbols, &mut segs, &mut vec![], &[], &[], &[], &buses);
+        assert_eq!(segs[0].net, "VCC");
+    }
 }

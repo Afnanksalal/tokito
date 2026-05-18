@@ -1,6 +1,4 @@
-//! Environment configuration for the API process.
-
-use std::env;
+//! Application configuration (`settings.toml` via [`crate::config_provider`]).
 
 /// xAI Grok (OpenAI-compatible chat API).
 #[derive(Debug, Clone)]
@@ -10,14 +8,13 @@ pub struct XaiConfig {
 }
 
 /// Firecrawl API host (default `https://api.firecrawl.dev/v1` for scrape).
-/// Search requests use `{root}/v2/search` where `root` strips a trailing `/v1` or `/v2`.
 #[derive(Debug, Clone)]
 pub struct FirecrawlConfig {
     pub api_key: String,
     pub base_url: String,
 }
 
-/// Nexar Supply (Octopart successor) OAuth client credentials.
+/// Nexar Supply OAuth client credentials.
 #[derive(Debug, Clone)]
 pub struct NexarConfig {
     pub client_id: String,
@@ -36,9 +33,8 @@ pub struct AgentLimits {
 pub struct Config {
     pub http_addr: String,
     pub db_max_connections: u32,
-    /// TCP port for embedded Postgres (default `15432`).
     pub embedded_port: u16,
-    /// Allowed browser origins for CORS; empty slice means mirror request (dev only).
+    pub pg_embed_version: u16,
     pub cors_origins: Vec<String>,
     pub jwt_secret: String,
     pub xai: Option<XaiConfig>,
@@ -48,105 +44,14 @@ pub struct Config {
     pub agent: AgentLimits,
 }
 
-/// Loads configuration from `TOKITO_*` environment variables.
+/// Loads configuration from `settings.toml` (merged with env for empty keys).
 pub fn load() -> anyhow::Result<Config> {
-    let http_addr = env::var("TOKITO_HTTP_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
-    let embedded_port = env::var("TOKITO_EMBEDDED_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(15_432);
-    let db_max_connections: u32 = env::var("TOKITO_DB_MAX_CONNECTIONS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10);
-    let cors_origins = env::var("TOKITO_CORS_ORIGINS")
-        .map(|s| {
-            s.split(',')
-                .map(|x| x.trim().to_string())
-                .filter(|x| !x.is_empty())
-                .collect()
-        })
-        .unwrap_or_default();
+    crate::config_provider::load_config()
+}
 
-    let jwt_secret = match env::var("TOKITO_JWT_SECRET") {
-        Ok(s) if !s.trim().is_empty() => s,
-        _ if cfg!(debug_assertions) => {
-            tracing::warn!("TOKITO_JWT_SECRET not set; using insecure development default");
-            "tokito-dev-insecure-jwt-secret-change-me".to_string()
-        }
-        _ => {
-            anyhow::bail!(
-                "TOKITO_JWT_SECRET is required in release builds (set a long random secret)"
-            );
-        }
-    };
-
-    let xai = env::var("TOKITO_XAI_API_KEY")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .map(|api_key| XaiConfig {
-            api_key,
-            base_url: env::var("TOKITO_XAI_BASE_URL")
-                .unwrap_or_else(|_| "https://api.x.ai/v1".to_string()),
-        });
-
-    let firecrawl = env::var("TOKITO_FIRECRAWL_API_KEY")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .map(|api_key| FirecrawlConfig {
-            api_key,
-            base_url: env::var("TOKITO_FIRECRAWL_BASE_URL")
-                .unwrap_or_else(|_| "https://api.firecrawl.dev/v1".to_string()),
-        });
-
-    let nexar = match (
-        env::var("TOKITO_NEXAR_CLIENT_ID").ok(),
-        env::var("TOKITO_NEXAR_CLIENT_SECRET").ok(),
-    ) {
-        (Some(cid), Some(sec)) if !cid.trim().is_empty() && !sec.trim().is_empty() => {
-            Some(NexarConfig {
-                client_id: cid,
-                client_secret: sec,
-                scope: env::var("TOKITO_NEXAR_SCOPE")
-                    .unwrap_or_else(|_| "nexar-supply".to_string()),
-            })
-        }
-        _ => None,
-    };
-
-    let lcsc_anonymous_search = env::var("TOKITO_LCSC_ANONYMOUS_SEARCH")
-        .ok()
-        .and_then(|s| match s.to_lowercase().as_str() {
-            "0" | "false" | "no" => Some(false),
-            "1" | "true" | "yes" => Some(true),
-            _ => None,
-        })
-        .unwrap_or(true);
-
-    let agent = AgentLimits {
-        max_iterations: env::var("TOKITO_AGENT_MAX_ITERATIONS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(10),
-        max_llm_tokens_per_run: env::var("TOKITO_AGENT_MAX_LLM_TOKENS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(96_000),
-        default_model: env::var("TOKITO_AGENT_MODEL").unwrap_or_else(|_| "grok-4.3".to_string()),
-    };
-
-    Ok(Config {
-        http_addr,
-        db_max_connections,
-        embedded_port,
-        cors_origins,
-        jwt_secret,
-        xai,
-        firecrawl,
-        nexar,
-        lcsc_anonymous_search,
-        agent,
-    })
+/// Loads configuration via an explicit provider (tests / HTTP service).
+pub fn load_from_provider(provider: &dyn crate::config_provider::ConfigProvider) -> anyhow::Result<Config> {
+    provider.load_config()
 }
 
 #[cfg(feature = "test-support")]
@@ -156,12 +61,13 @@ impl Config {
             http_addr: "127.0.0.1:0".into(),
             db_max_connections: 5,
             embedded_port: 17_334,
+            pg_embed_version: 16,
             cors_origins: vec![],
             jwt_secret: "test-jwt-secret".into(),
             xai: None,
             firecrawl: None,
             nexar: None,
-            lcsc_anonymous_search: false,
+            lcsc_anonymous_search: true,
             agent: AgentLimits {
                 max_iterations: 5,
                 max_llm_tokens_per_run: 8000,

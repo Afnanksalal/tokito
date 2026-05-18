@@ -7,6 +7,7 @@ pub mod intent;
 pub mod manufacturers;
 pub mod offers;
 pub mod parts;
+pub mod projects;
 pub mod research;
 pub mod schematic;
 pub mod schematic_document;

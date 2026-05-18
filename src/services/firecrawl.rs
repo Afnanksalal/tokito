@@ -28,7 +28,7 @@ fn api_root(fc_base_url: &str) -> String {
 pub async fn scrape(state: &AppState, body: Value) -> AppResult<Value> {
     let Some(fc) = state.firecrawl.as_ref() else {
         return Err(AppError::Unavailable(
-            "Firecrawl is not configured; set TOKITO_FIRECRAWL_API_KEY".into(),
+            crate::user_messages::FIRECRAWL_NOT_CONFIGURED.into(),
         ));
     };
     let has_url = body
@@ -66,7 +66,7 @@ pub async fn scrape(state: &AppState, body: Value) -> AppResult<Value> {
 pub async fn search(state: &AppState, body: Value) -> AppResult<Value> {
     let Some(fc) = state.firecrawl.as_ref() else {
         return Err(AppError::Unavailable(
-            "Firecrawl is not configured; set TOKITO_FIRECRAWL_API_KEY".into(),
+            crate::user_messages::FIRECRAWL_NOT_CONFIGURED.into(),
         ));
     };
     let query = body

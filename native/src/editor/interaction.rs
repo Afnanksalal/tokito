@@ -310,6 +310,10 @@ pub fn handle(
                 CanvasTool::NetLabel => {
                     editor.before_edit();
                     let name = editor.new_wire_net.trim();
+                    let rot = super::label_placement::wire_aligned_rotation(
+                        world,
+                        &editor.wire_segments,
+                    );
                     editor.net_labels.push(crate::canvas::NetLabel {
                         name: if name.is_empty() {
                             "NET".to_string()
@@ -317,6 +321,7 @@ pub fn handle(
                             name.to_string()
                         },
                         pos: world,
+                        rotation_deg: rot,
                         kind: editor.label_kind,
                     });
                     editor.clear_selection();
@@ -337,6 +342,7 @@ pub fn handle(
                         name,
                         pos: world,
                         kind: tokito::models::NetLabelKind::Hierarchical,
+                        rotation_deg: 0.0,
                     });
                     editor.clear_selection();
                     editor.selected_net_label = Some(editor.net_labels.len() - 1);

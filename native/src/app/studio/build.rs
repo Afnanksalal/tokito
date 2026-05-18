@@ -7,7 +7,7 @@ use crate::app::App;
 
 impl App {
     pub(crate) fn render_studio_build_tab(&mut self, ui: &mut egui::Ui, design_id: Uuid) {
-        let tokens = crate::ui::tokens::UiTokens::default();
+        let tokens = self.ui_tokens;
         let chrome = TabChrome::begin(ui, &tokens);
         chrome.header(
             ui,
@@ -25,14 +25,12 @@ impl App {
                         .color(chrome.tokens.text_primary),
                 );
                 ui.add_space(4.0);
-                ui.label(
-                    "Copy .env.example to .env next to Tokito.exe (or the repo root), set both keys, then restart.",
-                );
-                ui.label(
-                    egui::RichText::new("TOKITO_XAI_API_KEY · TOKITO_FIRECRAWL_API_KEY")
-                        .small()
-                        .weak(),
-                );
+                ui.label("Open the Settings panel and enter your xAI and Firecrawl API keys.");
+                if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Open Settings").clicked()
+                {
+                    use crate::app::studio_dock::{ensure_tab_visible, StudioTab};
+                    ensure_tab_visible(&mut self.dock_state, StudioTab::Settings);
+                }
             });
             ui.add_space(12.0);
         }
@@ -101,6 +99,40 @@ impl App {
                 .desired_rows(8)
                 .margin(egui::Margin::symmetric(10.0, 8.0)),
         );
+
+        if let Some(diff) = &self.build_bom_diff {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(format!("BOM: {diff}"))
+                    .small()
+                    .color(chrome.tokens.text_muted),
+            );
+        }
+
+        if self.prompt_busy {
+            ui.add_space(8.0);
+            let label = if self.build_stage.is_empty() {
+                "Building…".to_string()
+            } else {
+                self.build_stage.clone()
+            };
+            ui.horizontal(|ui| {
+                ui.add(egui::ProgressBar::new(0.0).animate(true).text(label));
+                if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Cancel").clicked() {
+                    self.cancel_build();
+                }
+            });
+        }
+
+        if !self.build_warnings.is_empty() {
+            ui.add_space(8.0);
+            chrome.subsection(ui, "Build notes");
+            crate::ui::layout::content_card(ui, chrome.tokens, |ui| {
+                for w in &self.build_warnings {
+                    ui.label(egui::RichText::new(w).small().color(chrome.tokens.warning));
+                }
+            });
+        }
 
         ui.add_space(10.0);
         let can_build = self.ai_build_ready && !self.prompt_busy && !self.prompt.trim().is_empty();

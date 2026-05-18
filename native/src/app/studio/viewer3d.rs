@@ -6,7 +6,7 @@ use crate::mcad_viewer::scene::placements_from_symbols;
 
 impl App {
     pub(crate) fn render_studio_viewer3d_tab(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let tokens = crate::ui::tokens::UiTokens::default();
+        let tokens = self.ui_tokens;
         let chrome = TabChrome::begin(ui, &tokens);
         chrome.header(
             ui,

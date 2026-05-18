@@ -312,10 +312,40 @@ fn point_on_segment(px: f64, py: f64, x1: f64, y1: f64, x2: f64, y2: f64, tol: f
 
 /// Light + deep ERC combined.
 pub fn erc_full(s: &ReplaceSchematic, doc: &SchematicDocument) -> Vec<ErcViolation> {
+    erc_full_with_options(s, doc, false)
+}
+
+pub fn erc_full_with_options(
+    s: &ReplaceSchematic,
+    doc: &SchematicDocument,
+    strict: bool,
+) -> Vec<ErcViolation> {
     let mut out = erc_light(s);
-    out.extend(erc_deep(s, doc));
+    out.extend(erc_deep_with_options(s, doc, strict));
     out.sort_by(|a, b| a.code.cmp(&b.code));
     out.dedup_by(|a, b| a.code == b.code && a.message == b.message);
+    out
+}
+
+pub fn has_blocking_erc(violations: &[ErcViolation]) -> bool {
+    violations
+        .iter()
+        .any(|v| v.severity == ErcSeverity::Error)
+}
+
+fn erc_deep_with_options(
+    s: &ReplaceSchematic,
+    doc: &SchematicDocument,
+    strict: bool,
+) -> Vec<ErcViolation> {
+    let mut out = erc_deep(s, doc);
+    if strict {
+        for v in &mut out {
+            if v.code == "ERC_OUTPUT_CONFLICT" {
+                v.severity = ErcSeverity::Error;
+            }
+        }
+    }
     out
 }
 
@@ -338,6 +368,8 @@ pub fn violations_to_erc_markers(
                 x: default_pos.0,
                 y: default_pos.1,
             },
+            instance_ref: v.instance_ref.clone(),
+            net_name: v.net_name.clone(),
         })
         .collect()
 }

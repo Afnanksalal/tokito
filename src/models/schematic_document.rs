@@ -9,7 +9,10 @@ use super::{
 };
 use crate::connectivity::{point_key_xy, DisjointSet, PointKey};
 
-pub const SCHEMATIC_DOCUMENT_SCHEMA_VERSION: u32 = 1;
+pub const SCHEMATIC_DOCUMENT_SCHEMA_VERSION: u32 = 2;
+
+const NET_LABEL_LINK_FIELD: &str = "tokito_net_label_id";
+const POWER_SYMBOL_LINK_FIELD: &str = "tokito_power_id";
 pub const DEFAULT_SHEET_ID: &str = "root";
 const GRID: f64 = 40.0;
 const PIN_SPACING: f64 = 20.0;
@@ -167,6 +170,10 @@ pub struct DocumentErcMarker {
     pub code: String,
     pub message: String,
     pub position: DocumentPoint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub net_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -228,6 +235,18 @@ pub struct DocumentDiagnostic {
 }
 
 impl SchematicDocument {
+    /// Apply schema migrations (K.5: v1 labels/power → aux symbol instances).
+    pub fn upgrade_to_current(mut doc: Self) -> Self {
+        if doc.schema_version >= SCHEMATIC_DOCUMENT_SCHEMA_VERSION {
+            return doc;
+        }
+        if doc.schema_version < 2 {
+            upgrade_v1_to_v2(&mut doc);
+        }
+        doc.schema_version = SCHEMATIC_DOCUMENT_SCHEMA_VERSION;
+        doc
+    }
+
     pub fn empty() -> Self {
         Self {
             schema_version: SCHEMATIC_DOCUMENT_SCHEMA_VERSION,
@@ -1052,6 +1071,64 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_v1_adds_aux_symbols_for_labels_and_power() {
+        let mut doc = SchematicDocument::empty();
+        doc.schema_version = 1;
+        let label_id = Uuid::new_v4();
+        doc.net_labels.push(DocumentNetLabel {
+            id: label_id,
+            sheet_id: DEFAULT_SHEET_ID.to_string(),
+            name: "SDA".into(),
+            kind: NetLabelKind::Global,
+            position: DocumentPoint { x: 120.0, y: 40.0 },
+            orientation: PinOrientation::Right,
+        });
+        doc.power_symbols.push(DocumentPowerSymbol {
+            id: Uuid::new_v4(),
+            sheet_id: DEFAULT_SHEET_ID.to_string(),
+            name: "GND".into(),
+            position: DocumentPoint { x: 80.0, y: 200.0 },
+        });
+        let upgraded = SchematicDocument::upgrade_to_current(doc);
+        assert_eq!(upgraded.schema_version, 2);
+        assert_eq!(upgraded.net_labels.len(), 1);
+        assert!(upgraded
+            .symbols
+            .iter()
+            .any(|s| s.symbol_id.as_deref() == Some("aux:Label_Global")));
+        assert!(upgraded
+            .symbols
+            .iter()
+            .any(|s| s.symbol_id.as_deref() == Some("aux:Power_GND")));
+        assert!(upgraded.symbols.iter().any(|s| {
+            s.fields
+                .get(NET_LABEL_LINK_FIELD)
+                .map(|v| v == &label_id.to_string())
+                .unwrap_or(false)
+        }));
+    }
+
+    #[test]
+    fn erc_markers_persist_instance_ref_through_json_round_trip() {
+        let mut doc = SchematicDocument::empty();
+        doc.erc_markers.push(DocumentErcMarker {
+            id: Uuid::new_v4(),
+            sheet_id: DEFAULT_SHEET_ID.to_string(),
+            severity: "error".into(),
+            code: "ERC001".into(),
+            message: "test".into(),
+            position: DocumentPoint { x: 10.0, y: 20.0 },
+            instance_ref: Some("U1".into()),
+            net_name: Some("VCC".into()),
+        });
+        let json = serde_json::to_string(&doc).unwrap();
+        let doc2: SchematicDocument = serde_json::from_str(&json).unwrap();
+        assert_eq!(doc2.erc_markers.len(), 1);
+        assert_eq!(doc2.erc_markers[0].instance_ref.as_deref(), Some("U1"));
+        assert_eq!(doc2.erc_markers[0].net_name.as_deref(), Some("VCC"));
+    }
+
+    #[test]
     fn wire_segment_pin_anchor_json_round_trip() {
         let seg = DocumentWireSegment {
             id: Uuid::new_v4(),
@@ -1072,5 +1149,115 @@ mod tests {
         assert_eq!(back.start_pin.as_ref().unwrap().pin_name, "2");
         assert!(back.end_pin.is_none());
         assert_eq!(back.net_id, seg.net_id);
+    }
+}
+
+fn upgrade_v1_to_v2(doc: &mut SchematicDocument) {
+    let mut lbl_idx = doc
+        .symbols
+        .iter()
+        .filter(|s| s.ref_des.starts_with("LBL"))
+        .count();
+    for label in &doc.net_labels {
+        if doc.symbols.iter().any(|s| {
+            s.fields
+                .get(NET_LABEL_LINK_FIELD)
+                .map(|v| v == &label.id.to_string())
+                .unwrap_or(false)
+        }) {
+            continue;
+        }
+        lbl_idx += 1;
+        let lib = aux_library_for_label(label.kind);
+        doc.symbols.push(DocumentSymbol {
+            id: Uuid::new_v4(),
+            sheet_id: label.sheet_id.clone(),
+            part_id: None,
+            symbol_id: Some(lib.into()),
+            ref_des: format!("LBL{lbl_idx:04}"),
+            value: Some(label.name.clone()),
+            position: label.position,
+            rotation: orientation_degrees(label.orientation),
+            mirror: MirrorMode::None,
+            fields: BTreeMap::from([(
+                NET_LABEL_LINK_FIELD.to_string(),
+                label.id.to_string(),
+            )]),
+            footprint_ref: None,
+            pins: vec![aux_attachment_pin()],
+        });
+    }
+
+    let mut pwr_idx = doc
+        .symbols
+        .iter()
+        .filter(|s| s.ref_des.starts_with("PWR"))
+        .count();
+    for pwr in &doc.power_symbols {
+        if doc.symbols.iter().any(|s| {
+            s.fields
+                .get(POWER_SYMBOL_LINK_FIELD)
+                .map(|v| v == &pwr.id.to_string())
+                .unwrap_or(false)
+        }) {
+            continue;
+        }
+        pwr_idx += 1;
+        doc.symbols.push(DocumentSymbol {
+            id: Uuid::new_v4(),
+            sheet_id: pwr.sheet_id.clone(),
+            part_id: None,
+            symbol_id: Some(aux_library_for_power(&pwr.name).into()),
+            ref_des: format!("PWR{pwr_idx:04}"),
+            value: Some(pwr.name.clone()),
+            position: pwr.position,
+            rotation: 0.0,
+            mirror: MirrorMode::None,
+            fields: BTreeMap::from([(
+                POWER_SYMBOL_LINK_FIELD.to_string(),
+                pwr.id.to_string(),
+            )]),
+            footprint_ref: None,
+            pins: vec![aux_attachment_pin()],
+        });
+    }
+}
+
+fn aux_library_for_label(kind: NetLabelKind) -> &'static str {
+    match kind {
+        NetLabelKind::Global => "aux:Label_Global",
+        NetLabelKind::Hierarchical => "aux:Label_Hierarchical",
+        NetLabelKind::Local | NetLabelKind::NetClassDirective => "aux:Label_Local",
+    }
+}
+
+fn aux_library_for_power(name: &str) -> &'static str {
+    let u = name.to_ascii_uppercase();
+    if u.contains("GND") {
+        "aux:Power_GND"
+    } else if u.contains("3V3") || u.contains("3.3") {
+        "aux:Power_VCC_3V3"
+    } else {
+        "aux:Power_VCC"
+    }
+}
+
+fn orientation_degrees(o: PinOrientation) -> f64 {
+    match o {
+        PinOrientation::Up => 270.0,
+        PinOrientation::Down => 90.0,
+        PinOrientation::Left => 180.0,
+        PinOrientation::Right => 0.0,
+    }
+}
+
+fn aux_attachment_pin() -> DocumentPin {
+    DocumentPin {
+        number: Some("1".into()),
+        name: "1".into(),
+        electrical_type: ElectricalPinType::Passive,
+        offset: DocumentPoint { x: 0.0, y: 0.0 },
+        orientation: PinOrientation::Right,
+        visible: true,
     }
 }

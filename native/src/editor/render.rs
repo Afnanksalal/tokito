@@ -184,31 +184,43 @@ pub fn paint_annotations(painter: &Painter, ctx: &RenderCtx<'_>) {
         } else {
             t.label_ink
         };
-        if label.kind == tokito::models::NetLabelKind::Hierarchical {
-            let sz = Vec2::new(28.0, 18.0);
-            let r = egui::Rect::from_min_size(p, sz);
-            painter.rect_stroke(r, 2.0, Stroke::new(1.5, color));
-            painter.line_segment(
-                [r.center() - Vec2::new(6.0, 0.0), r.right_center()],
-                Stroke::new(1.5, color),
-            );
-            painter.text(
-                r.min + Vec2::new(4.0, 2.0),
-                egui::Align2::LEFT_TOP,
-                &label.name,
-                egui::FontId::monospace(10.0),
-                color,
-            );
-        } else {
-            painter.text(
-                p + Vec2::new(8.0, -8.0),
-                egui::Align2::LEFT_CENTER,
-                &label.name,
-                egui::FontId::monospace(12.0),
-                color,
-            );
-            painter.line_segment([p, p + Vec2::new(22.0, 0.0)], Stroke::new(1.4, color));
+        if let Some(lib) = ctx.symbol_lib {
+            let sym_key = aux_label_symbol_key(label.kind);
+            if lib.contains(sym_key) {
+                let ctx_paint = crate::base_symbols::CanvasSymbolPaint {
+                    painter: &painter,
+                    viewport: &ctx.editor.viewport,
+                    origin: ctx.origin,
+                    sym_pos: label.pos,
+                    rot_deg: label.rotation_deg,
+                    ink: color,
+                    outline: color,
+                    stroke_px: 1.5,
+                };
+                lib.paint_named_on_canvas(
+                    ctx_paint,
+                    sym_key,
+                    crate::symbols_draw::CompKind::Generic,
+                    &[],
+                );
+                painter.text(
+                    p + Vec2::new(8.0, -6.0),
+                    egui::Align2::LEFT_BOTTOM,
+                    &label.name,
+                    egui::FontId::proportional(11.0),
+                    color,
+                );
+                continue;
+            }
         }
+        super::annot_graphics::paint_net_label(
+            &painter,
+            p,
+            &label.name,
+            label.kind,
+            label.rotation_deg,
+            color,
+        );
     }
 
     for (i, junction) in ctx.editor.junctions.iter().enumerate() {
@@ -248,22 +260,37 @@ pub fn paint_annotations(painter: &Painter, ctx: &RenderCtx<'_>) {
         } else {
             Color32::from_rgb(32, 140, 88)
         };
-        painter.line_segment([p, p + Vec2::new(0.0, -18.0)], Stroke::new(1.5, color));
-        painter.line_segment(
-            [p + Vec2::new(-10.0, -18.0), p + Vec2::new(10.0, -18.0)],
-            Stroke::new(1.5, color),
-        );
-        painter.line_segment(
-            [p + Vec2::new(-6.0, -23.0), p + Vec2::new(6.0, -23.0)],
-            Stroke::new(1.5, color),
-        );
-        painter.text(
-            p + Vec2::new(0.0, -33.0),
-            egui::Align2::CENTER_BOTTOM,
-            &pwr.name,
-            egui::FontId::monospace(11.5),
-            color,
-        );
+        if let Some(lib) = ctx.symbol_lib {
+            if let Some(sym_key) = aux_power_symbol_key(&pwr.name) {
+                if lib.contains(sym_key) {
+                    let ctx_paint = crate::base_symbols::CanvasSymbolPaint {
+                        painter: &painter,
+                        viewport: &ctx.editor.viewport,
+                        origin: ctx.origin,
+                        sym_pos: pwr.pos,
+                        rot_deg: 0.0,
+                        ink: color,
+                        outline: color,
+                        stroke_px: 1.5,
+                    };
+                    lib.paint_named_on_canvas(
+                        ctx_paint,
+                        sym_key,
+                        crate::symbols_draw::CompKind::Generic,
+                        &[],
+                    );
+                    painter.text(
+                        p + Vec2::new(0.0, -6.0),
+                        egui::Align2::CENTER_BOTTOM,
+                        &pwr.name,
+                        egui::FontId::proportional(11.0),
+                        color,
+                    );
+                    continue;
+                }
+            }
+        }
+        super::annot_graphics::paint_power_by_name(&painter, p, &pwr.name, color);
     }
 
     for (i, bus) in ctx.editor.buses.iter().enumerate() {
@@ -469,4 +496,25 @@ pub fn paint_wire_rubber_band(
     let p0 = ctx.editor.viewport.world_to_screen(ctx.origin, start);
     painter.circle_filled(p0, 5.0, ctx.tokens.sym_outline);
     painter.circle_filled(p0, 4.0, ctx.tokens.pin_hot);
+}
+
+fn aux_label_symbol_key(kind: tokito::models::NetLabelKind) -> &'static str {
+    match kind {
+        tokito::models::NetLabelKind::Global => "aux:Label_Global",
+        tokito::models::NetLabelKind::Hierarchical => "aux:Label_Hierarchical",
+        tokito::models::NetLabelKind::Local | tokito::models::NetLabelKind::NetClassDirective => {
+            "aux:Label_Local"
+        }
+    }
+}
+
+fn aux_power_symbol_key(name: &str) -> Option<&'static str> {
+    let lower = name.to_ascii_lowercase();
+    if lower.contains("gnd") || lower == "ground" || lower == "vss" {
+        Some("aux:Power_GND")
+    } else if lower.contains("3v3") || lower.contains("3.3") {
+        Some("aux:Power_VCC_3V3")
+    } else {
+        Some("aux:Power_VCC")
+    }
 }

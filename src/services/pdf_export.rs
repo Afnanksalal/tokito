@@ -1,58 +1,173 @@
-//! Minimal vector PDF export from `SchematicDocument` (plot for review).
+//! Vector PDF export from `SchematicDocument` (review plot + multi-page pack).
 
-use crate::models::SchematicDocument;
+use crate::models::{ErcViolation, SchematicDocument};
+use crate::services::schematic_graphics::{self, PlotTransform};
 
-/// A4 landscape-ish page in points; schematic coords scaled to fit.
+/// A4 landscape in points.
+const PAGE_W: f64 = 842.0;
+const PAGE_H: f64 = 595.0;
+const MARGIN: f64 = 36.0;
+
 pub fn document_to_pdf(doc: &SchematicDocument) -> Vec<u8> {
-    let page_w = 842.0;
-    let page_h = 595.0;
-    let margin = 36.0;
+    document_to_pdf_titled(doc, "Schematic")
+}
 
-    let (min_x, min_y, max_x, max_y) = bounds(doc);
-    let span_x = (max_x - min_x).max(1.0);
-    let span_y = (max_y - min_y).max(1.0);
-    let scale = ((page_w - 2.0 * margin) / span_x).min((page_h - 2.0 * margin) / span_y);
+pub fn document_to_pdf_titled(doc: &SchematicDocument, design_name: &str) -> Vec<u8> {
+    let stream = schematic_page_stream(doc, design_name, PAGE_W, PAGE_H, MARGIN);
+    build_pdf_multipage(&[(stream, PAGE_W, PAGE_H)])
+}
 
-    fn tx(x: f64, min_x: f64, scale: f64, margin: f64) -> f64 {
-        margin + (x - min_x) * scale
-    }
-    fn ty(y: f64, min_y: f64, scale: f64, margin: f64, page_h: f64) -> f64 {
-        page_h - margin - (y - min_y) * scale
-    }
+/// Multi-page pack: schematic (review) + BOM table + ERC summary.
+pub fn document_to_pdf_pack(
+    doc: &SchematicDocument,
+    design_name: &str,
+    bom_csv: &str,
+    erc: &[ErcViolation],
+) -> Vec<u8> {
+    let page1 = schematic_page_stream(doc, design_name, PAGE_W, PAGE_H, MARGIN);
+    let page2 = bom_table_stream(bom_csv, design_name);
+    let page3 = erc_summary_stream(erc, design_name);
+    build_pdf_multipage(&[
+        (page1, PAGE_W, PAGE_H),
+        (page2, PAGE_W, PAGE_H),
+        (page3, PAGE_W, PAGE_H),
+    ])
+}
 
+fn schematic_page_stream(
+    doc: &SchematicDocument,
+    design_name: &str,
+    page_w: f64,
+    page_h: f64,
+    margin: f64,
+) -> String {
+    let t = PlotTransform::from_document(doc, page_w, page_h, margin);
     let mut stream = String::new();
-    stream.push_str("0.2 0.25 0.3 RG\n");
-    stream.push_str("1 w\n");
+    stream.push_str("0.2 0.25 0.3 RG\n1 w\n");
     for seg in &doc.wire_segments {
-        let x1 = tx(seg.start.x, min_x, scale, margin);
-        let y1 = ty(seg.start.y, min_y, scale, margin, page_h);
-        let x2 = tx(seg.end.x, min_x, scale, margin);
-        let y2 = ty(seg.end.y, min_y, scale, margin, page_h);
-        stream.push_str(&format!("{x1:.2} {y1:.2} m {x2:.2} {y2:.2} l S\n"));
+        stream.push_str(&schematic_graphics::wire_pdf(seg, &t));
     }
-    stream.push_str("0 0 0 rg\n");
+    for bus in &doc.buses {
+        stream.push_str(&schematic_graphics::bus_pdf(bus, &t));
+    }
+    stream.push_str("0.15 0.2 0.25 RG\n0.8 w\n");
     for sym in &doc.symbols {
-        let x = tx(sym.position.x, min_x, scale, margin);
-        let y = ty(sym.position.y, min_y, scale, margin, page_h);
+        stream.push_str(&schematic_graphics::symbol_pdf(sym, &t));
+    }
+    stream.push_str("0 0.35 0.55 RG\n1 w\n");
+    for label in &doc.net_labels {
+        stream.push_str(&schematic_graphics::label_pdf(label, &t));
+    }
+    for pwr in &doc.power_symbols {
+        stream.push_str(&schematic_graphics::power_pdf(pwr, &t));
+    }
+    stream.push_str(&schematic_graphics::title_block_pdf(design_name, &t, page_w, page_h));
+    stream
+}
+
+fn bom_table_stream(bom_csv: &str, design_name: &str) -> String {
+    let mut stream = String::new();
+    let mut y = PAGE_H - MARGIN;
+    stream.push_str(&format!(
+        "BT /F1 14 Tf {:.2} {:.2} Td (BOM — {}) Tj ET\n",
+        MARGIN,
+        y,
+        escape_pdf(design_name)
+    ));
+    y -= 28.0;
+    stream.push_str(&format!(
+        "BT /F1 9 Tf {:.2} {:.2} Td (MPN    Qty    Notes) Tj ET\n",
+        MARGIN, y
+    ));
+    y -= 16.0;
+    for line in bom_csv.lines().skip(1).take(48) {
+        if y < MARGIN + 20.0 {
+            break;
+        }
+        let row = line.chars().take(90).collect::<String>();
         stream.push_str(&format!(
-            "BT /F1 9 Tf {x:.2} {y:.2} Td ({}) Tj ET\n",
-            escape_pdf(&sym.ref_des)
+            "BT /F1 8 Tf {:.2} {:.2} Td ({}) Tj ET\n",
+            MARGIN,
+            y,
+            escape_pdf(&row)
+        ));
+        y -= 12.0;
+    }
+    stream
+}
+
+fn erc_summary_stream(erc: &[ErcViolation], design_name: &str) -> String {
+    let mut stream = String::new();
+    let mut y = PAGE_H - MARGIN;
+    stream.push_str(&format!(
+        "BT /F1 14 Tf {:.2} {:.2} Td (ERC — {}) Tj ET\n",
+        MARGIN,
+        y,
+        escape_pdf(design_name)
+    ));
+    y -= 28.0;
+    if erc.is_empty() {
+        stream.push_str(&format!(
+            "BT /F1 10 Tf {:.2} {:.2} Td (No ERC violations.) Tj ET\n",
+            MARGIN, y
+        ));
+        return stream;
+    }
+    for v in erc.iter().take(40) {
+        if y < MARGIN + 20.0 {
+            break;
+        }
+        let row = format!("[{}] {}", v.code, v.message);
+        let row = row.chars().take(100).collect::<String>();
+        stream.push_str(&format!(
+            "BT /F1 8 Tf {:.2} {:.2} Td ({}) Tj ET\n",
+            MARGIN,
+            y,
+            escape_pdf(&row)
+        ));
+        y -= 12.0;
+    }
+    stream
+}
+
+fn build_pdf_multipage(pages: &[(String, f64, f64)]) -> Vec<u8> {
+    let n = pages.len();
+    let font_id = 3 + n * 2;
+    let mut objects: Vec<String> = Vec::new();
+    objects.push("1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n".into());
+
+    let mut page_obj_ids: Vec<usize> = Vec::new();
+    let mut content_obj_ids: Vec<usize> = Vec::new();
+    for i in 0..n {
+        page_obj_ids.push(3 + i * 2);
+        content_obj_ids.push(4 + i * 2);
+    }
+
+    let mut kids: String = String::from("[");
+    for id in &page_obj_ids {
+        kids.push_str(&format!("{id} 0 R "));
+    }
+    kids.push(']');
+    objects.push(format!(
+        "2 0 obj<< /Type /Pages /Kids {kids} /Count {n} >>endobj\n"
+    ));
+
+    for (i, (stream, pw, ph)) in pages.iter().enumerate() {
+        let page_id = page_obj_ids[i];
+        let content_id = content_obj_ids[i];
+        objects.push(format!(
+            "{page_id} 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.0} {ph:.0}] /Contents {content_id} 0 R /Resources<< /Font<< /F1 {font_id} 0 R >> >> >>endobj\n"
+        ));
+        objects.push(format!(
+            "{content_id} 0 obj<< /Length {} >>stream\n{stream}endstream\nendobj\n",
+            stream.as_bytes().len(),
+            stream = stream
         ));
     }
 
-    let stream_bytes = stream.as_bytes();
-    let mut objects: Vec<String> = Vec::new();
-    objects.push("1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n".into());
-    objects.push("2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n".into());
     objects.push(format!(
-        "3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_w:.0} {page_h:.0}] /Contents 4 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n"
+        "{font_id} 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\n"
     ));
-    objects.push(format!(
-        "4 0 obj<< /Length {} >>stream\n{stream}endstream\nendobj\n",
-        stream_bytes.len(),
-        stream = stream
-    ));
-    objects.push("5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\n".into());
 
     let mut pdf = String::from("%PDF-1.4\n");
     let mut offsets = vec![0usize];
@@ -71,49 +186,6 @@ pub fn document_to_pdf(doc: &SchematicDocument) -> Vec<u8> {
         objects.len() + 1
     ));
     pdf.into_bytes()
-}
-
-fn bounds(doc: &SchematicDocument) -> (f64, f64, f64, f64) {
-    let mut min_x = 0.0;
-    let mut min_y = 0.0;
-    let mut max_x = 400.0;
-    let mut max_y = 300.0;
-    let mut any = false;
-    for seg in &doc.wire_segments {
-        for p in [seg.start, seg.end] {
-            if !any {
-                min_x = p.x;
-                min_y = p.y;
-                max_x = p.x;
-                max_y = p.y;
-                any = true;
-            } else {
-                min_x = min_x.min(p.x);
-                min_y = min_y.min(p.y);
-                max_x = max_x.max(p.x);
-                max_y = max_y.max(p.y);
-            }
-        }
-    }
-    for sym in &doc.symbols {
-        let p = sym.position;
-        if !any {
-            min_x = p.x;
-            min_y = p.y;
-            max_x = p.x;
-            max_y = p.y;
-            any = true;
-        } else {
-            min_x = min_x.min(p.x);
-            min_y = min_y.min(p.y);
-            max_x = max_x.max(p.x);
-            max_y = max_y.max(p.y);
-        }
-    }
-    if !any {
-        return (-100.0, -100.0, 500.0, 400.0);
-    }
-    (min_x - 40.0, min_y - 40.0, max_x + 40.0, max_y + 40.0)
 }
 
 fn escape_pdf(s: &str) -> String {
@@ -142,5 +214,12 @@ mod tests {
         });
         let pdf = document_to_pdf(&doc);
         assert!(pdf.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn pdf_pack_has_multiple_pages() {
+        let doc = SchematicDocument::empty();
+        let pdf = document_to_pdf_pack(&doc, "Test", "mpn,qty,notes\nR1,1,\n", &[]);
+        assert!(pdf.windows(5).filter(|w| *w == b"/Type").count() >= 3);
     }
 }

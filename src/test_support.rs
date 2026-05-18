@@ -41,7 +41,7 @@ pub async fn test_pool() -> anyhow::Result<PgPool> {
             .unwrap_or_else(pick_ephemeral_port);
         let pg = tokio::time::timeout(
             Duration::from_secs(300),
-            db::EmbeddedPostgres::start(&dir, port),
+            db::EmbeddedPostgres::start(&dir, port, 16),
         )
         .await
         .context("embedded postgres setup timed out")??;

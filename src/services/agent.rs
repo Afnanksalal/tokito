@@ -70,6 +70,80 @@ fn tools_schema() -> Value {
       {
         "type": "function",
         "function": {
+          "name": "plan_build",
+          "description": "LLM planning phase: Firecrawl queries and candidate parts for a design.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "design_id": { "type": "string" },
+              "prompt": { "type": "string" }
+            },
+            "required": ["design_id", "prompt"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "resolve_bom",
+          "description": "Resolve BOM parts from plan JSON and ingested research.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "design_id": { "type": "string" },
+              "prompt": { "type": "string" },
+              "plan": { "type": "object" },
+              "pages_ingested": { "type": "integer" }
+            },
+            "required": ["design_id", "prompt", "plan"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "suggest_schematic",
+          "description": "Propose a schematic ReplaceSchematic for the design (not auto-saved).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "design_id": { "type": "string" },
+              "prompt": { "type": "string" }
+            },
+            "required": ["design_id", "prompt"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "reconcile_bom",
+          "description": "Compare database BOM lines with schematic instance counts.",
+          "parameters": {
+            "type": "object",
+            "properties": { "design_id": { "type": "string" } },
+            "required": ["design_id"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "run_research",
+          "description": "Run Firecrawl search for a query and attach artifacts to the design.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "design_id": { "type": "string" },
+              "query": { "type": "string" }
+            },
+            "required": ["design_id", "query"]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
           "name": "append_bom_lines",
           "description": "Append BOM lines (does not delete existing lines). Each line references an existing part_id.",
           "parameters": {
@@ -173,6 +247,104 @@ async fn execute_tool(
                 }
             }
             Ok(json!({ "part_id": pid, "upserted_offers": count }))
+        }
+        "plan_build" => {
+            let did = args
+                .get("design_id")
+                .and_then(|x| x.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .or(default_design)
+                .ok_or_else(|| AppError::BadRequest("design_id required".into()))?;
+            let prompt = args
+                .get("prompt")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            designs::assert_visible(&state.pool, did, auth.user_id).await?;
+            let plan = crate::services::design_pipeline::plan_build(
+                state, &state.pool, auth.user_id, did, &prompt,
+            )
+            .await?;
+            serde_json::to_value(plan).map_err(|e| AppError::Any(e.into()))
+        }
+        "resolve_bom" => {
+            let did = args
+                .get("design_id")
+                .and_then(|x| x.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .or(default_design)
+                .ok_or_else(|| AppError::BadRequest("design_id required".into()))?;
+            let prompt = args
+                .get("prompt")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            let pages = args
+                .get("pages_ingested")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0) as usize;
+            let plan: crate::services::design_pipeline::BuildPlan =
+                serde_json::from_value(args.get("plan").cloned().unwrap_or(json!({})))
+                    .map_err(|e| AppError::BadRequest(format!("invalid plan: {e}")))?;
+            designs::assert_visible(&state.pool, did, auth.user_id).await?;
+            let resolved = crate::services::design_pipeline::resolve_bom_parts(
+                state, &state.pool, auth.user_id, did, &prompt, &plan, pages,
+            )
+            .await?;
+            serde_json::to_value(resolved).map_err(|e| AppError::Any(e.into()))
+        }
+        "suggest_schematic" => {
+            let did = args
+                .get("design_id")
+                .and_then(|x| x.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .or(default_design)
+                .ok_or_else(|| AppError::BadRequest("design_id required".into()))?;
+            let prompt = args
+                .get("prompt")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            designs::assert_visible(&state.pool, did, auth.user_id).await?;
+            let (schematic, erc) = crate::services::design_pipeline::suggest_schematic_stage(
+                state, &state.pool, auth.user_id, did, &prompt,
+            )
+            .await?;
+            Ok(json!({ "schematic": schematic, "erc_warnings": erc }))
+        }
+        "reconcile_bom" => {
+            let did = args
+                .get("design_id")
+                .and_then(|x| x.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .or(default_design)
+                .ok_or_else(|| AppError::BadRequest("design_id required".into()))?;
+            designs::assert_visible(&state.pool, did, auth.user_id).await?;
+            crate::services::design_pipeline::reconcile_bom(&state.pool, did).await
+        }
+        "run_research" => {
+            let did = args
+                .get("design_id")
+                .and_then(|x| x.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .or(default_design)
+                .ok_or_else(|| AppError::BadRequest("design_id required".into()))?;
+            let query = args
+                .get("query")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            designs::assert_visible(&state.pool, did, auth.user_id).await?;
+            let ids = crate::services::research_pipeline::search_web_into_design(
+                state,
+                &state.pool,
+                auth.user_id,
+                did,
+                &query,
+                Some(4),
+            )
+            .await?;
+            Ok(json!({ "design_id": did, "pages_ingested": ids.len() }))
         }
         "get_design_bom" => {
             let did = args
@@ -364,6 +536,10 @@ pub async fn run(state: &AppState, auth: AuthUser, input: AgentRunInput) -> AppR
     )
     .await?;
 
+    let final_message = summary
+        .clone()
+        .unwrap_or_else(|| "Agent finished.".into());
+
     Ok(json!({
         "run_id": run_id,
         "usage": {
@@ -371,6 +547,8 @@ pub async fn run(state: &AppState, auth: AuthUser, input: AgentRunInput) -> AppR
             "completion_tokens": total_completion,
             "scrapes": scrapes_used
         },
+        "summary": summary,
+        "final_message": final_message,
         "messages": messages
     }))
 }

@@ -1,4 +1,4 @@
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::{SchematicDocument, SCHEMATIC_DOCUMENT_SCHEMA_VERSION};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -15,9 +15,21 @@ pub async fn get(pool: &PgPool, design_id: Uuid) -> AppResult<Option<SchematicDo
     .fetch_optional(pool)
     .await?;
 
-    row.map(serde_json::from_value)
-        .transpose()
-        .map_err(|e| anyhow::anyhow!(e).into())
+    let doc: Option<SchematicDocument> = match row {
+        None => None,
+        Some(v) => Some(
+            serde_json::from_value(v).map_err(|e| AppError::Any(anyhow::anyhow!(e)))?,
+        ),
+    };
+    let Some(mut doc) = doc else {
+        return Ok(None);
+    };
+    let needs_save = doc.schema_version < SCHEMATIC_DOCUMENT_SCHEMA_VERSION;
+    doc = SchematicDocument::upgrade_to_current(doc);
+    if needs_save {
+        upsert(pool, design_id, &doc).await?;
+    }
+    Ok(Some(doc))
 }
 
 pub async fn upsert(pool: &PgPool, design_id: Uuid, document: &SchematicDocument) -> AppResult<()> {
@@ -35,7 +47,7 @@ pub async fn upsert(pool: &PgPool, design_id: Uuid, document: &SchematicDocument
     )
     .bind(design_id)
     .bind(value)
-    .bind(SCHEMATIC_DOCUMENT_SCHEMA_VERSION as i32)
+    .bind(document.schema_version as i32)
     .execute(pool)
     .await?;
     Ok(())

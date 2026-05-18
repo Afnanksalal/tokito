@@ -6,6 +6,8 @@ Tokito can expose a **versioned JSON** surface under **`/v1`**, plus **`GET /hea
 
 **Typical base URL (when the optional server is run):** `http://localhost:8080`
 
+**Configuration:** The HTTP binary loads the same **`settings.toml`** as the desktop app (`ConfigProvider` → file + optional env overlay). See [SETTINGS.md](SETTINGS.md) for the key map.
+
 ```mermaid
 flowchart LR
   subgraph clients[Clients]

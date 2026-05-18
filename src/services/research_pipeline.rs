@@ -148,6 +148,8 @@ pub async fn search_web_into_design(
         let (content_text, truncated) = clamp_content(&text_full);
         let meta = json!({
             "firecrawl_search": true,
+            "search_query": query,
+            "search_query_norm": research::normalize_query(query),
             "truncated_to_chars": MAX_CONTENT_CHARS,
             "truncated": truncated,
         });

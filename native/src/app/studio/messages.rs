@@ -6,7 +6,7 @@ use tokito::models::ErcSeverity;
 
 impl App {
     pub(crate) fn render_studio_messages_tab(&mut self, ui: &mut egui::Ui) {
-        let tokens = crate::ui::tokens::UiTokens::default();
+        let tokens = self.ui_tokens;
         let chrome = TabChrome::begin(ui, &tokens);
         chrome.header(
             ui,
@@ -48,11 +48,43 @@ impl App {
             return;
         }
 
+        ui.horizontal(|ui| {
+            crate::ui::table::sortable_header(ui, "Code", 0, &mut self.erc_sort);
+            crate::ui::table::sortable_header(ui, "Message", 1, &mut self.erc_sort);
+            crate::ui::table::sortable_header(ui, "Severity", 2, &mut self.erc_sort);
+        });
+        ui.add_space(4.0);
+
+        let mut indexed: Vec<(usize, tokito::models::ErcViolation)> = self
+            .erc_violations
+            .clone()
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| (i, v))
+            .collect();
+        indexed.sort_by(|a, b| {
+            if self.erc_sort.dir == crate::ui::table::SortDir::None {
+                return a.0.cmp(&b.0);
+            }
+            let ord = match self.erc_sort.column {
+                0 => a.1.code.cmp(&b.1.code),
+                1 => a.1.message.cmp(&b.1.message),
+                2 => format!("{:?}", a.1.severity).cmp(&format!("{:?}", b.1.severity)),
+                _ => std::cmp::Ordering::Equal,
+            };
+            let ord = match self.erc_sort.dir {
+                crate::ui::table::SortDir::Asc => ord,
+                crate::ui::table::SortDir::Desc => ord.reverse(),
+                crate::ui::table::SortDir::None => std::cmp::Ordering::Equal,
+            };
+            ord.then(a.0.cmp(&b.0))
+        });
+
         egui::ScrollArea::vertical()
             .id_salt("erc_messages")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for (i, v) in self.erc_violations.clone().iter().enumerate() {
+                for (i, v) in indexed {
                     let color = match v.severity {
                         ErcSeverity::Error => chrome.tokens.danger,
                         ErcSeverity::Warning => chrome.tokens.warning,
@@ -83,7 +115,11 @@ impl App {
         self.editor.refresh_wire_connectivity();
         let doc = self.graph_to_document();
         let (body, _) = doc.to_replace_schematic();
-        self.erc_violations = tokito::services::schematic_validate::erc_full(&body, &doc);
+        self.erc_violations = tokito::services::schematic_validate::erc_full_with_options(
+            &body,
+            &doc,
+            self.erc_strict(),
+        );
         self.set_erc_note_from_slice(&self.erc_violations.clone());
         self.editor.erc_markers = self
             .erc_violations

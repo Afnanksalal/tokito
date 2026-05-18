@@ -166,3 +166,52 @@ pub async fn csv_export(pool: &PgPool, design_id: Uuid) -> AppResult<String> {
     }
     Ok(buf)
 }
+
+pub async fn delete_line(pool: &PgPool, line_id: Uuid) -> AppResult<()> {
+    let r = sqlx::query("DELETE FROM bom_lines WHERE id = $1")
+        .bind(line_id)
+        .execute(pool)
+        .await?;
+    if r.rows_affected() == 0 {
+        return Err(crate::error::AppError::NotFound("bom line not found".into()));
+    }
+    Ok(())
+}
+
+pub async fn patch_line(
+    pool: &PgPool,
+    line_id: Uuid,
+    quantity: Option<f64>,
+    notes: Option<&str>,
+) -> AppResult<BomLine> {
+    let current: BomLine = sqlx::query_as(
+        r#"
+        SELECT id, design_id, part_id, quantity, sort_order, notes, updated_at
+        FROM bom_lines WHERE id = $1
+        "#,
+    )
+    .bind(line_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| crate::error::AppError::NotFound("bom line not found".into()))?;
+    let qty = quantity.unwrap_or(current.quantity);
+    if qty <= 0.0 {
+        return Err(crate::error::AppError::BadRequest(
+            "quantity must be > 0".into(),
+        ));
+    }
+    let notes_val = notes.map(|s| s.to_string()).or(current.notes);
+    sqlx::query_as::<_, BomLine>(
+        r#"
+        UPDATE bom_lines SET quantity = $2, notes = $3, updated_at = now()
+        WHERE id = $1
+        RETURNING id, design_id, part_id, quantity, sort_order, notes, updated_at
+        "#,
+    )
+    .bind(line_id)
+    .bind(qty)
+    .bind(&notes_val)
+    .fetch_one(pool)
+    .await
+    .map_err(Into::into)
+}

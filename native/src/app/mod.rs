@@ -18,8 +18,17 @@ use crate::editor::PlaceSymbolRequest;
 use crate::editor::{document, CanvasTool, SchematicEditor};
 use crate::util::{guess_prefix, next_refdes};
 
-type SchematicGenerationRx =
-    Receiver<Result<(ReplaceSchematic, Vec<ErcViolation>, SchematicEditBatch), String>>;
+type SchematicGenerationRx = Receiver<
+    Result<
+        (
+            ReplaceSchematic,
+            Vec<ErcViolation>,
+            SchematicEditBatch,
+            Vec<String>,
+        ),
+        String,
+    >,
+>;
 
 pub mod studio_dock;
 
@@ -66,9 +75,13 @@ pub enum Route {
 
 pub struct App {
     _embedded_db: tokito::db::EmbeddedPostgres,
+    _project_embedded: Option<tokito::db::EmbeddedPostgres>,
+    db_url: String,
+    global_pool: sqlx::PgPool,
     rt: tokio::runtime::Runtime,
     pool: sqlx::PgPool,
     state: AppState,
+    db_status: tokito::db::DatabaseStatus,
 
     user_id: Uuid,
 
@@ -101,6 +114,7 @@ pub struct App {
 
     /// Background schematic generation (never block egui thread).
     generation_rx: Option<SchematicGenerationRx>,
+    build_cancel_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 
     /// Dockable studio panels (`egui_dock`).
     dock_state: egui_dock::DockState<StudioTab>,
@@ -131,7 +145,7 @@ pub struct App {
     pending_edit_batch: Option<SchematicEditBatch>,
     pending_edit_selected: Vec<bool>,
 
-    /// Both TOKITO_XAI_API_KEY and TOKITO_FIRECRAWL_API_KEY are set (required to Build).
+    /// xAI and Firecrawl are configured in Settings (required to Build).
     ai_build_ready: bool,
 
     command_palette_open: bool,
@@ -141,15 +155,44 @@ pub struct App {
     symbol_import_path: String,
 
     mcad_viewer: crate::mcad_viewer::McadViewer,
+
+    settings_file: tokito::settings::SettingsFile,
+    ui_tokens: crate::ui::UiTokens,
+
+    research_draft_title: String,
+    research_draft_body: String,
+    research_editing_id: Option<Uuid>,
+    research_annotate_parent: Option<Uuid>,
+
+    design_edit_name: String,
+    design_edit_desc: String,
+    design_edit_notes: String,
+
+    toasts: crate::ui::toast::ToastStack,
+    last_backup_label: String,
+    bom_sort: crate::ui::table::SortState,
+    erc_sort: crate::ui::table::SortState,
+    research_sort: crate::ui::table::SortState,
+
+    projects: Vec<tokito::models::Project>,
+    active_project_id: Option<Uuid>,
+    new_project_name: String,
+    new_project_embedded_db: bool,
+    projects_list_dirty: bool,
+
+    build_warnings: Vec<String>,
+    build_stage: String,
+    build_bom_diff: Option<String>,
+    design_save_debounce: f32,
+
+    agent_query: String,
+    agent_busy: bool,
+    agent_last_message: String,
+    agent_rx: Option<Receiver<Result<String, String>>>,
 }
 
 impl App {
     pub fn try_new() -> anyhow::Result<Self> {
-        let env_beside_exe = crate::paths::exe_dir().join(".env");
-        if env_beside_exe.is_file() {
-            dotenvy::from_path(&env_beside_exe).ok();
-        }
-        dotenvy::dotenv().ok();
         tracing_subscriber::fmt()
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
@@ -157,13 +200,19 @@ impl App {
             )
             .init();
 
-        let cfg = tokito::config::load()?;
+        let settings_file = tokito::config_provider::load_settings_merged();
+        let cfg = settings_file.to_config()?;
         let ai_build_ready = cfg.xai.is_some() && cfg.firecrawl.is_some();
+        let ui_tokens = crate::theme::tokens_for(&settings_file.general.theme);
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .context("tokio runtime")?;
+        let settings_migrated = settings_file.general.settings_migrated_from_env;
         let (pool, embedded) = rt.block_on(tokito::db::connect(&cfg)).context("database")?;
+        let db_url = embedded.database_url();
+        let global_pool = pool.clone();
+        rt.block_on(tokito::store::projects::ensure_default_workspace(&pool))?;
 
         let state = AppState::try_new(pool.clone(), &cfg)?;
 
@@ -171,11 +220,15 @@ impl App {
 
         let base_symbols = crate::base_symbols::BaseSymbolLibrary::open().ok();
 
-        Ok(Self {
+        let mut app = Self {
             _embedded_db: embedded,
+            _project_embedded: None,
+            db_url,
+            global_pool,
             rt,
             pool,
             state,
+            db_status: tokito::db::DatabaseStatus::Ready,
             user_id,
             route: Route::Projects,
             err: None,
@@ -196,6 +249,7 @@ impl App {
             prompt_busy: false,
             projects_need_refresh: true,
             generation_rx: None,
+            build_cancel_flag: None,
             dock_state: studio_dock::default_studio_dock(),
             console_lines: vec![],
             bom_lines: vec![],
@@ -215,7 +269,285 @@ impl App {
             command_palette_query: String::new(),
             symbol_import_path: String::new(),
             mcad_viewer: crate::mcad_viewer::McadViewer::default(),
-        })
+            settings_file,
+            ui_tokens,
+            research_draft_title: String::new(),
+            research_draft_body: String::new(),
+            research_editing_id: None,
+            research_annotate_parent: None,
+            design_edit_name: String::new(),
+            design_edit_desc: String::new(),
+            design_edit_notes: String::new(),
+            toasts: crate::ui::toast::ToastStack::default(),
+            last_backup_label: "never".into(),
+            bom_sort: crate::ui::table::SortState::default(),
+            erc_sort: crate::ui::table::SortState::default(),
+            research_sort: crate::ui::table::SortState::default(),
+            projects: vec![],
+            active_project_id: Some(tokito::store::projects::default_project_id()),
+            new_project_name: String::new(),
+            new_project_embedded_db: false,
+            projects_list_dirty: true,
+            build_warnings: vec![],
+            build_stage: String::new(),
+            build_bom_diff: None,
+            design_save_debounce: 0.0,
+            agent_query: String::new(),
+            agent_busy: false,
+            agent_last_message: String::new(),
+            agent_rx: None,
+        };
+        if settings_migrated {
+            app.toasts.push(
+                "Imported legacy settings into settings.toml",
+                crate::ui::toast::ToastKind::Info,
+            );
+        }
+        Ok(app)
+    }
+
+    pub(crate) fn autosave_design_info(&mut self, design_id: Uuid) {
+        let Some(design) = self.design.clone() else {
+            return;
+        };
+        if design.id != design_id {
+            return;
+        }
+        let name = self.design_edit_name.trim().to_string();
+        if name.is_empty() {
+            return;
+        }
+        let desc = self.design_edit_desc.trim().to_string();
+        let notes = self.design_edit_notes.trim().to_string();
+        let patch = tokito::models::PatchDesign {
+            name: Some(name),
+            description: if desc.is_empty() { None } else { Some(desc) },
+            notes: if notes.is_empty() { None } else { Some(notes) },
+        };
+        match self
+            .rt
+            .block_on(async { tokito::store::designs::patch(&self.pool, design_id, patch).await })
+        {
+            Ok(row) => {
+                self.design = Some(row);
+            }
+            Err(e) => self.set_err(e.to_string()),
+        }
+    }
+
+    pub(crate) fn shutdown_database(&mut self) {
+        let _ = self.rt.block_on(self._embedded_db.graceful_stop());
+        if let Some(ref mut emb) = self._project_embedded {
+            let _ = self.rt.block_on(emb.graceful_stop());
+        }
+    }
+
+    fn disconnect_project_db(&mut self) {
+        self._project_embedded = None;
+        self.pool = self.global_pool.clone();
+        if let Ok(cfg) = self.settings_file.to_config() {
+            if let Ok(st) = AppState::try_new(self.pool.clone(), &cfg) {
+                self.state = st;
+            }
+        }
+    }
+
+    fn connect_project_db_for_design(&mut self, design_id: Uuid) {
+        self.disconnect_project_db();
+        let ws = self.rt.block_on(async {
+            tokito::store::projects::workspace_path_for_design(&self.global_pool, design_id).await
+        });
+        let Ok(ws) = ws else { return };
+        let meta = tokito::store::projects::read_toml_for_workspace(&ws);
+        if !meta.uses_embedded_db() {
+            return;
+        }
+        let cfg = match self.settings_file.to_config() {
+            Ok(c) => c,
+            Err(e) => {
+                self.set_err(e.to_string());
+                return;
+            }
+        };
+        let res = self
+            .rt
+            .block_on(tokito::db::connect_project_embedded(&ws, &cfg));
+        match res {
+            Ok((pool, emb)) => {
+                self._project_embedded = Some(emb);
+                self.pool = pool.clone();
+                if let Ok(st) = AppState::try_new(pool, &cfg) {
+                    self.state = st;
+                }
+                self.db_status = tokito::db::DatabaseStatus::Ready;
+                self.log_console(format!(
+                    "Using per-project database at {}",
+                    tokito::project_toml::ProjectToml::embedded_data_dir(&ws).display()
+                ));
+            }
+            Err(e) => {
+                self.db_status = tokito::db::DatabaseStatus::Error;
+                self.set_err(format!("Project database failed: {e}"));
+            }
+        }
+    }
+
+    pub(crate) fn toast_ok(&mut self, msg: impl Into<String>) {
+        self.toasts
+            .push(msg, crate::ui::toast::ToastKind::Success);
+    }
+
+    pub(crate) fn refresh_projects(&mut self) {
+        let res = self
+            .rt
+            .block_on(tokito::store::projects::list(&self.pool, 64));
+        match res {
+            Ok(rows) => {
+                self.projects = rows;
+                self.projects_list_dirty = false;
+            }
+            Err(e) => self.set_err(e.to_string()),
+        }
+    }
+
+    pub(crate) fn erc_strict(&self) -> bool {
+        true
+    }
+
+    pub(crate) fn export_blocked_by_erc(&self) -> bool {
+        self.erc_strict()
+            && tokito::services::schematic_validate::has_blocking_erc(&self.erc_violations)
+    }
+
+    pub(crate) fn backup_current_design(&mut self, design_id: Uuid) {
+        let name = self
+            .design
+            .as_ref()
+            .map(|d| d.name.clone())
+            .unwrap_or_else(|| "design".into());
+        let document = self.graph_to_document();
+        let (replace, _) = document.to_replace_schematic();
+        let view = tokito::models::SchematicView::from_replace(design_id, &replace);
+        let ws = self
+            .rt
+            .block_on(tokito::store::projects::workspace_path_for_design(
+                &self.pool, design_id,
+            ))
+            .unwrap_or_else(|_| tokito::paths::project_dir("default"));
+        let csv = self
+            .rt
+            .block_on(async { tokito::store::bom::csv_export(&self.pool, design_id).await })
+            .unwrap_or_default();
+        let pg_ver = self.settings_file.database.pg_embed_version;
+        match tokito::services::backup::write_design_backup_with_db(
+            &ws,
+            &name,
+            &document,
+            &view,
+            &csv,
+            Some(&self.db_url),
+            pg_ver,
+        ) {
+            Ok(dir) => {
+                self.last_backup_label =
+                    format!("{}", time_format_now());
+                self.log_console(format!("Backup saved to {}", dir.display()));
+                self.toast_ok("Design backup saved");
+            }
+            Err(e) => self.set_err(e.to_string()),
+        }
+    }
+
+    pub(crate) fn export_dir_for_design(&self, design_id: Uuid) -> std::path::PathBuf {
+        let ws = self
+            .rt
+            .block_on(tokito::store::projects::workspace_path_for_design(
+                &self.pool, design_id,
+            ))
+            .unwrap_or_else(|_| tokito::paths::project_dir("default"));
+        tokito::paths::project_exports_dir(&ws)
+    }
+
+    pub(crate) fn open_path_after_export(&self, path: &std::path::Path) {
+        let _ = open::that(path);
+    }
+
+    pub(crate) fn bom_sync_status(&mut self, _design_id: Uuid) -> String {
+        let doc = self.graph_to_document();
+        let (replace, _) = doc.to_replace_schematic();
+        let proposed = tokito::services::bom_sync::propose_from_schematic(&replace);
+        if proposed.is_empty() && self.bom_lines.is_empty() {
+            return "No BOM".into();
+        }
+        let current_qty: f64 = self.bom_lines.iter().map(|l| l.quantity).sum();
+        let proposed_qty: f64 = proposed.iter().map(|l| l.quantity).sum();
+        if (current_qty - proposed_qty).abs() < 0.01
+            && self.bom_lines.len() == proposed.len()
+        {
+            "In sync".into()
+        } else {
+            format!(
+                "{} line(s) differ from schematic",
+                proposed.len().abs_diff(self.bom_lines.len()).max(1)
+            )
+        }
+    }
+
+    pub(crate) fn add_empty_bom_line(&mut self, design_id: Uuid) {
+        let res = self.rt.block_on(async {
+            let parts = tokito::store::parts::search(
+                &self.pool,
+                tokito::models::PartSearchParams {
+                    q: Some("generic".into()),
+                    limit: Some(1),
+                },
+            )
+            .await?;
+            let part_id = parts
+                .first()
+                .map(|p| p.id)
+                .ok_or_else(|| tokito::error::AppError::BadRequest("no parts in catalog".into()))?;
+            tokito::store::bom::append_lines(
+                &self.pool,
+                design_id,
+                &[tokito::models::BomLineInput {
+                    part_id,
+                    quantity: 1.0,
+                    sort_order: 0,
+                    notes: None,
+                }],
+            )
+            .await
+        });
+        match res {
+            Ok(_) => {
+                self.bom_dirty = true;
+                self.toast_ok("BOM line added");
+            }
+            Err(e) => self.set_err(e.to_string()),
+        }
+    }
+
+    pub(crate) fn sync_bom_from_schematic(&mut self, design_id: Uuid) {
+        let doc = self.graph_to_document();
+        let (replace, _) = doc.to_replace_schematic();
+        let proposed = tokito::services::bom_sync::propose_from_schematic(&replace);
+        if proposed.is_empty() {
+            self.set_err("No parts with part_id on schematic to sync");
+            return;
+        }
+        let inputs = tokito::services::bom_sync::to_bom_inputs(&proposed);
+        let body = tokito::models::ReplaceBom { lines: inputs };
+        let res = self.rt.block_on(async {
+            tokito::store::bom::replace_validated(&self.pool, design_id, body).await
+        });
+        match res {
+            Ok(_) => {
+                self.bom_dirty = true;
+                self.log_console("BOM synced from schematic.");
+            }
+            Err(e) => self.set_err(e),
+        }
     }
 
     pub(crate) fn suggest_erc_fixes(&mut self) {
@@ -392,9 +724,16 @@ impl App {
 
     fn reload_projects(&mut self) {
         self.err = None;
+        if self.projects_list_dirty {
+            self.refresh_projects();
+        }
         let user_id = self.user_id;
         let res = self.rt.block_on(async {
-            tokito::store::designs::list_for_user(&self.pool, user_id, 100).await
+            if let Some(pid) = self.active_project_id {
+                tokito::store::designs::list_for_project(&self.pool, pid, user_id, 100).await
+            } else {
+                tokito::store::designs::list_for_user(&self.pool, user_id, 100).await
+            }
         });
         match res {
             Ok(rows) => self.designs = rows,
@@ -402,8 +741,13 @@ impl App {
         }
     }
 
+    pub(crate) fn hovered_net_name(&self, ctx: &egui::Context) -> Option<String> {
+        self.editor.hovered_net_at_pointer(ctx)
+    }
+
     fn open_design(&mut self, design_id: Uuid) {
         self.err = None;
+        self.connect_project_db_for_design(design_id);
         let user_id = self.user_id;
         let res = self.rt.block_on(async {
             tokito::store::designs::assert_visible(&self.pool, design_id, user_id).await
@@ -427,6 +771,9 @@ impl App {
 
         match sch {
             Ok(sch) => {
+                self.design_edit_name = design.name.clone();
+                self.design_edit_desc = design.description.clone().unwrap_or_default();
+                self.design_edit_notes = design.notes.clone().unwrap_or_default();
                 self.design = Some(design);
                 if let Some(doc) = stored_doc {
                     self.apply_document_to_canvas(doc);
@@ -544,6 +891,10 @@ impl App {
     }
 
     pub(crate) fn export_schematic_file(&mut self, kind: &str) {
+        if self.export_blocked_by_erc() {
+            self.set_err("Export blocked: fix ERC errors before exporting (ERC strict mode is on).");
+            return;
+        }
         let safe_name = self
             .design
             .as_ref()
@@ -552,17 +903,40 @@ impl App {
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
             .collect::<String>();
-        let _ = std::fs::create_dir_all("exports");
         let document = self.graph_to_document();
         let design_id = match self.route {
             Route::Studio { design_id } => design_id,
             _ => return,
         };
+        let design_title = self
+            .design
+            .as_ref()
+            .map(|d| d.name.as_str())
+            .unwrap_or(&safe_name);
+        let export_dir = self.export_dir_for_design(design_id);
+        let _ = std::fs::create_dir_all(&export_dir);
+        let ext = match kind {
+            "svg" => "svg",
+            "netlist" => "txt",
+            "sexp_netlist" => "net",
+            "pdf" => "pdf",
+            "pdf_pack" => "pdf",
+            "bom_csv" => "csv",
+            "mcad" => "json",
+            _ => "bin",
+        };
+        let dated = tokito::services::export_service::dated_filename(&safe_name, ext);
+        let default_path = export_dir.join(&dated);
+        let picked = rfd::FileDialog::new()
+            .set_directory(&export_dir)
+            .set_file_name(&dated)
+            .save_file();
+        let target = picked.unwrap_or(default_path);
         let result = match kind {
             "svg" => {
-                let svg = tokito::services::svg_export::document_to_svg(&document);
-                let path = format!("exports/{safe_name}.svg");
-                std::fs::write(&path, svg).map(|_| path)
+                let svg =
+                    tokito::services::svg_export::document_to_svg_titled(&document, design_title);
+                std::fs::write(&target, svg).map(|_| target)
             }
             "netlist" | "sexp_netlist" => {
                 let (replace, _) = document.to_replace_schematic();
@@ -572,25 +946,92 @@ impl App {
                 } else {
                     tokito::services::netlist::connectivity_text(&view)
                 };
-                let ext = if kind == "sexp_netlist" { "net" } else { "txt" };
-                let path = format!("exports/{safe_name}.{ext}");
-                std::fs::write(&path, text).map(|_| path)
+                std::fs::write(&target, text).map(|_| target)
             }
             "pdf" => {
-                let pdf = tokito::services::pdf_export::document_to_pdf(&document);
-                let path = format!("exports/{safe_name}.pdf");
-                std::fs::write(&path, pdf).map(|_| path)
+                let pdf =
+                    tokito::services::pdf_export::document_to_pdf_titled(&document, design_title);
+                std::fs::write(&target, pdf).map(|_| target)
+            }
+            "pdf_pack" => {
+                let csv = self.rt.block_on(async {
+                    tokito::store::bom::csv_export(&self.pool, design_id).await
+                });
+                let erc = self.erc_violations.clone();
+                match csv {
+                    Ok(bom_csv) => {
+                        let pdf = tokito::services::pdf_export::document_to_pdf_pack(
+                            &document,
+                            design_title,
+                            &bom_csv,
+                            &erc,
+                        );
+                        std::fs::write(&target, pdf).map(|_| target)
+                    }
+                    Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+                }
+            }
+            "bom_csv" => {
+                let csv = self.rt.block_on(async {
+                    tokito::store::bom::csv_export(&self.pool, design_id).await
+                });
+                match csv {
+                    Ok(text) => std::fs::write(&target, text).map(|_| target),
+                    Err(e) => Err(std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+                }
+            }
+            "bundle" => {
+                let (replace, _) = document.to_replace_schematic();
+                let view = tokito::models::SchematicView::from_replace(design_id, &replace);
+                match self.rt.block_on(async {
+                    tokito::store::bom::csv_export(&self.pool, design_id).await
+                }) {
+                    Ok(csv) => {
+                        let mcad = tokito::services::mcad_export::document_handoff_json(
+                            &document,
+                            design_title,
+                        );
+                        match tokito::services::export_bundle::write_design_exports_zip(
+                            &export_dir,
+                            &safe_name,
+                            &document,
+                            &view,
+                            &csv,
+                            Some(&mcad),
+                        ) {
+                            Ok(w) => Ok(
+                                w.zip_path.unwrap_or_else(|| {
+                                    export_dir.join(format!("{safe_name}_bundle.zip"))
+                                }),
+                            ),
+                            Err(e) => Err(std::io::Error::new(
+                                std::io::ErrorKind::Other,
+                                e.to_string(),
+                            )),
+                        }
+                    }
+                    Err(e) => Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    )),
+                }
             }
             "mcad" => {
-                let path = format!("exports/{safe_name}_mcad.json");
-                self.write_mcad_handoff_json(&path, &document).map(|_| path)
+                let json = tokito::services::mcad_export::document_handoff_json(
+                    &document,
+                    design_title,
+                );
+                std::fs::write(&target, json).map(|_| target)
             }
             _ => return,
         };
         match result {
             Ok(path) => {
                 self.err = None;
-                self.log_console(format!("Exported {path}"));
+                self.log_console(format!("Exported {}", path.display()));
+                self.toast_ok(format!("Exported {}", path.file_name().and_then(|s| s.to_str()).unwrap_or("file")));
+                self.open_path_after_export(path.as_path());
+                crate::util::reveal_in_folder(path.as_path());
             }
             Err(e) => self.set_err(format!("Export failed: {e}")),
         }
@@ -600,7 +1041,11 @@ impl App {
         let mut document = self.graph_to_document();
         self.studio_dirty = false;
         let (body, document_diagnostics) = document.to_replace_schematic();
-        let warns = tokito::services::schematic_validate::erc_full(&body, &document);
+        let warns = tokito::services::schematic_validate::erc_full_with_options(
+            &body,
+            &document,
+            self.erc_strict(),
+        );
         self.erc_violations = warns.clone();
         document.erc_markers = tokito::services::schematic_validate::violations_to_erc_markers(
             &warns,
@@ -615,8 +1060,8 @@ impl App {
                 message: m.message.clone(),
                 severity: m.severity.clone(),
                 position: Pos2::new(m.position.x as f32, m.position.y as f32),
-                instance_ref: None,
-                net_name: None,
+                instance_ref: m.instance_ref.clone(),
+                net_name: m.net_name.clone(),
             })
             .collect();
         let res = self.rt.block_on(async {
@@ -645,13 +1090,38 @@ impl App {
     pub(crate) fn poll_async_jobs(&mut self, ctx: &egui::Context) {
         if let Some(rx) = self.generation_rx.take() {
             match rx.try_recv() {
-                Ok(Ok((_draft, erc, batch))) => {
+                Ok(Ok((_draft, erc, batch, warnings))) => {
                     self.prompt_busy = false;
                     self.generation_rx = None;
+                    let cancelled = self
+                        .build_cancel_flag
+                        .as_ref()
+                        .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed));
+                    self.build_cancel_flag = None;
+                    if cancelled {
+                        self.log_console("Build cancelled.".to_string());
+                        return;
+                    }
                     self.pending_edit_batch = Some(batch);
                     self.pending_edit_selected = vec![true];
                     self.erc_violations = erc.clone();
+                    self.build_warnings = warnings.clone();
                     self.set_erc_note_from_slice(&erc);
+                    for w in warnings {
+                        self.log_console(format!("Build: {w}"));
+                    }
+                    self.build_stage.clear();
+                    if let Route::Studio { design_id } = self.route {
+                        if let Ok(v) = self.rt.block_on(
+                            tokito::services::design_pipeline::reconcile_bom(
+                                &self.pool, design_id,
+                            ),
+                        ) {
+                            if let Some(msg) = v.get("message").and_then(|m| m.as_str()) {
+                                self.build_bom_diff = Some(msg.to_string());
+                            }
+                        }
+                    }
                     self.log_console("Build complete — review proposed changes in the Build tab.");
                 }
                 Ok(Err(msg)) => {
@@ -659,10 +1129,13 @@ impl App {
                     self.generation_rx = None;
                     let mut m = msg;
                     if m.contains("API_KEY") || m.contains("api key") || m.contains("xAI") {
-                        m.push_str(" — set TOKITO_XAI_API_KEY in .env and restart.");
+                        m.push_str(&format!(" — {}", tokito::user_messages::XAI_NOT_CONFIGURED));
                     }
                     if m.contains("Firecrawl") || m.contains("firecrawl") {
-                        m.push_str(" — set TOKITO_FIRECRAWL_API_KEY in .env and restart.");
+                        m.push_str(&format!(
+                            " — {}",
+                            tokito::user_messages::FIRECRAWL_NOT_CONFIGURED
+                        ));
                     }
                     self.erc_note = None;
                     self.set_err(m);
@@ -673,12 +1146,41 @@ impl App {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.prompt_busy = false;
                     self.generation_rx = None;
-                    self.set_err("Schematic generation stopped unexpectedly.");
+                    let cancelled = self
+                        .build_cancel_flag
+                        .as_ref()
+                        .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed));
+                    self.build_cancel_flag = None;
+                    if cancelled {
+                        self.log_console("Build cancelled.".to_string());
+                    } else {
+                        self.set_err("Schematic generation stopped unexpectedly.");
+                    }
                 }
             }
         }
 
-        if self.prompt_busy {
+        if let Some(rx) = self.agent_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok(text)) => {
+                    self.agent_busy = false;
+                    self.agent_last_message = text.clone();
+                    self.log_console(format!("Agent: {text}"));
+                }
+                Ok(Err(e)) => {
+                    self.agent_busy = false;
+                    self.set_err(e);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.agent_rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.agent_busy = false;
+                }
+            }
+        }
+
+        if self.prompt_busy || self.agent_busy {
             ctx.request_repaint();
         }
     }
@@ -916,41 +1418,6 @@ impl App {
         }
     }
 
-    fn write_mcad_handoff_json(
-        &self,
-        path: &str,
-        document: &SchematicDocument,
-    ) -> std::io::Result<()> {
-        let placements: Vec<serde_json::Value> = self
-            .editor
-            .symbols
-            .iter()
-            .filter_map(|s| {
-                let fp = s.footprint_ref.as_deref().filter(|f| !f.is_empty())?;
-                Some(serde_json::json!({
-                    "ref_des": s.ref_des,
-                    "footprint": fp,
-                    "part_id": s.part_id,
-                    "symbol_id": s.symbol_id,
-                    "x_mm": s.pos.x,
-                    "y_mm": s.pos.y,
-                    "rotation_deg": s.rotation_deg,
-                    "sheet_id": self.editor.active_sheet_id,
-                }))
-            })
-            .collect();
-        let payload = serde_json::json!({
-            "format": "tokito_mcad_handoff_v1",
-            "design": self.design.as_ref().map(|d| &d.name),
-            "sheet_count": document.sheets.len(),
-            "placements": placements,
-        });
-        std::fs::write(
-            path,
-            serde_json::to_string_pretty(&payload).unwrap_or_default(),
-        )
-    }
-
     pub(crate) fn place_generic_symbol(&mut self, prefix: &str) {
         let (symbol_id, pin_layout) = self
             .base_symbols
@@ -1092,14 +1559,21 @@ impl App {
         self.log_console("Applied generated schematic draft.".to_string());
     }
 
+    pub(crate) fn cancel_build(&mut self) {
+        if let Some(flag) = &self.build_cancel_flag {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.generation_rx = None;
+        self.prompt_busy = false;
+        self.log_console("Build cancelled.".to_string());
+    }
+
     fn run_prompt_draft(&mut self, design_id: Uuid, ctx: &egui::Context) {
         if self.generation_rx.is_some() {
             return;
         }
         if !self.ai_build_ready {
-            self.set_err(
-                "AI build requires TOKITO_XAI_API_KEY and TOKITO_FIRECRAWL_API_KEY in .env — copy .env.example and restart.",
-            );
+            self.set_err("AI build requires xAI and Firecrawl API keys in Settings.");
             return;
         }
         let trimmed = self.prompt.trim().to_string();
@@ -1108,7 +1582,16 @@ impl App {
             return;
         }
 
+        if let Some(flag) = &self.build_cancel_flag {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.build_cancel_flag = Some(cancel.clone());
+
         self.prompt_busy = true;
+        self.build_stage = "Planning…".into();
+        self.build_warnings.clear();
+        self.build_bom_diff = None;
         self.err = None;
         self.erc_note = None;
 
@@ -1118,21 +1601,34 @@ impl App {
         let state = self.state.clone();
         let pool = self.pool.clone();
         let repaint = ctx.clone();
-
+        let stage = std::sync::Arc::new(std::sync::Mutex::new("Planning…".to_string()));
+        let stage_cb = stage.clone();
         self.rt.spawn(async move {
+            {
+                let mut g = stage_cb.lock().unwrap();
+                *g = "Research (Firecrawl)…".into();
+            }
             let outcome = tokito::services::design_pipeline::build_design_from_prompt(
-                &state, &pool, user_id, design_id, &prompt,
+                &state,
+                &pool,
+                user_id,
+                design_id,
+                &prompt,
+                true,
+                Some(cancel.clone()),
             )
             .await
-            .map(|(schematic, erc)| {
+            .map(|out| {
                 let batch = SchematicEditBatch::from_replace(
-                    schematic.clone(),
+                    out.schematic.clone(),
                     "Replace schematic from AI build",
                 );
-                (schematic, erc, batch)
+                (out.schematic, out.erc_warnings, batch, out.warnings)
             })
             .map_err(|e| e.to_string());
-            let _ = tx.send(outcome);
+            if !cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                let _ = tx.send(outcome);
+            }
             repaint.request_repaint();
         });
 
@@ -1169,7 +1665,7 @@ impl App {
     }
 
     pub(crate) fn lcsc_catalog_enabled(&self) -> bool {
-        self.state.lcsc_anonymous_search
+        true
     }
 
     pub(crate) fn search_catalog(&mut self) {
@@ -1178,11 +1674,8 @@ impl App {
             self.catalog_hits.clear();
             return;
         }
-        if !self.lcsc_catalog_enabled() && self.state.nexar.is_none() {
+        if self.state.nexar.is_none() && !self.lcsc_catalog_enabled() {
             self.catalog_hits.clear();
-            self.log_console(
-                "Catalog search disabled — set TOKITO_LCSC_ANONYMOUS_SEARCH=true in .env and restart.",
-            );
             return;
         }
         let state = self.state.clone();
@@ -1300,6 +1793,22 @@ impl App {
         });
         self.editor.tool = CanvasTool::Select;
         self.mcad_viewer.invalidate();
+        if let (Some(pid), Route::Studio { design_id }) = (part_id, self.route) {
+            let _ = self.rt.block_on(async {
+                tokito::store::bom::append_lines(
+                    &self.pool,
+                    design_id,
+                    &[tokito::models::BomLineInput {
+                        part_id: pid,
+                        quantity: 1.0,
+                        sort_order: 0,
+                        notes: None,
+                    }],
+                )
+                .await
+            });
+            self.bom_dirty = true;
+        }
         self.log_console(format!(
             "Placed {} ({}{})",
             ref_des,
@@ -1370,6 +1879,15 @@ fn placement_value_for_symbols(
                 crate::component_value::default_value_for_library_id(symbol_id.unwrap_or(""))
             }),
     }
+}
+
+fn time_format_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!("t{secs}")
 }
 
 include!("impl_eframe.rs");

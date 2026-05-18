@@ -7,6 +7,9 @@ pub struct Design {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
+    pub notes: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<Uuid>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_user_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
@@ -17,12 +20,15 @@ pub struct Design {
 pub struct CreateDesign {
     pub name: String,
     pub description: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct PatchDesign {
     pub name: Option<String>,
     pub description: Option<String>,
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

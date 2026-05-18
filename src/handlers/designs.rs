@@ -115,25 +115,105 @@ pub async fn export_design(
             format!("design-{id}.net"),
             text.into_bytes(),
         ))
-    } else if fmt == "svg" {
+    } else if fmt == "bundle" || fmt == "zip" {
+        let design = design_store::get(&state.pool, id).await?;
         let doc = schematic_document::get(&state.pool, id)
             .await?
             .ok_or_else(|| AppError::NotFound("schematic document not found".into()))?;
-        let svg = crate::services::svg_export::document_to_svg(&doc);
+        let view = schematic::get_view(&state.pool, id).await?;
+        let csv = bom::csv_export(&state.pool, id).await?;
+        let payload = crate::services::export_service::export_design_bytes(
+            crate::services::export_service::ExportFormat::BundleZip,
+            id,
+            &design.name,
+            &doc,
+            &view,
+            &csv,
+        )?;
         Ok(attachment(
-            "image/svg+xml; charset=utf-8",
-            format!("design-{id}.svg"),
-            svg.into_bytes(),
+            payload.content_type,
+            payload.filename,
+            payload.bytes,
+        ))
+    } else if fmt == "mcad" || fmt == "mcad_json" {
+        let design = design_store::get(&state.pool, id).await?;
+        let doc = schematic_document::get(&state.pool, id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("schematic document not found".into()))?;
+        let view = schematic::get_view(&state.pool, id).await?;
+        let csv = bom::csv_export(&state.pool, id).await?;
+        let payload = crate::services::export_service::export_design_bytes(
+            crate::services::export_service::ExportFormat::McadJson,
+            id,
+            &design.name,
+            &doc,
+            &view,
+            &csv,
+        )?;
+        Ok(attachment(
+            payload.content_type,
+            payload.filename,
+            payload.bytes,
+        ))
+    } else if fmt == "svg" {
+        let design = design_store::get(&state.pool, id).await?;
+        let doc = schematic_document::get(&state.pool, id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("schematic document not found".into()))?;
+        let view = schematic::get_view(&state.pool, id).await?;
+        let csv = bom::csv_export(&state.pool, id).await?;
+        let payload = crate::services::export_service::export_design_bytes(
+            crate::services::export_service::ExportFormat::Svg,
+            id,
+            &design.name,
+            &doc,
+            &view,
+            &csv,
+        )?;
+        Ok(attachment(
+            payload.content_type,
+            payload.filename,
+            payload.bytes,
         ))
     } else if fmt == "pdf" {
+        let design = design_store::get(&state.pool, id).await?;
         let doc = schematic_document::get(&state.pool, id)
             .await?
             .ok_or_else(|| AppError::NotFound("schematic document not found".into()))?;
-        let pdf = crate::services::pdf_export::document_to_pdf(&doc);
+        let view = schematic::get_view(&state.pool, id).await?;
+        let csv = bom::csv_export(&state.pool, id).await?;
+        let payload = crate::services::export_service::export_design_bytes(
+            crate::services::export_service::ExportFormat::Pdf,
+            id,
+            &design.name,
+            &doc,
+            &view,
+            &csv,
+        )?;
         Ok(attachment(
-            "application/pdf",
-            format!("design-{id}.pdf"),
-            pdf,
+            payload.content_type,
+            payload.filename,
+            payload.bytes,
+        ))
+    } else if fmt == "pdf_pack" || fmt == "pdfpack" {
+        let design = design_store::get(&state.pool, id).await?;
+        let doc = schematic_document::get(&state.pool, id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("schematic document not found".into()))?;
+        let view = schematic::get_view(&state.pool, id).await?;
+        let csv = bom::csv_export(&state.pool, id).await?;
+        let payload = crate::services::export_service::export_design_bytes(
+            crate::services::export_service::ExportFormat::PdfPack,
+            id,
+            &design.name,
+            &doc,
+            &view,
+            &csv,
+        )?;
+        Ok(attachment(
+            payload.content_type,
+            payload.filename,
+            payload.bytes,
         ))
     } else {
         let design = design_store::get(&state.pool, id).await?;
@@ -272,21 +352,23 @@ pub async fn suggest_schematic(
     if prompt.is_empty() {
         return Err(AppError::BadRequest("prompt must not be empty".into()));
     }
-    let (schematic, erc_warnings) = crate::services::design_pipeline::build_design_from_prompt(
+    let outcome = crate::services::design_pipeline::build_design_from_prompt(
         &state,
         &state.pool,
         auth.user_id,
         id,
         prompt,
+        true,
+        None,
     )
     .await?;
     let edit_batch = crate::models::SchematicEditBatch::from_replace(
-        schematic.clone(),
+        outcome.schematic.clone(),
         "Replace schematic from AI build",
     );
     Ok(Json(SchematicSuggestResponse {
-        schematic,
-        erc_warnings,
+        schematic: outcome.schematic,
+        erc_warnings: outcome.erc_warnings,
         edit_batch,
     }))
 }

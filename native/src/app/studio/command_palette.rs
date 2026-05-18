@@ -64,6 +64,7 @@ impl App {
             "export_netlist" => self.export_schematic_file("netlist"),
             "export_sexp" => self.export_schematic_file("sexp_netlist"),
             "export_pdf" => self.export_schematic_file("pdf"),
+            "export_pdf_pack" => self.export_schematic_file("pdf_pack"),
             "export_mcad" => self.export_schematic_file("mcad"),
             "duplicate" => self.duplicate_selection(),
             "delete" => self.delete_selected(),
@@ -110,6 +111,29 @@ impl App {
                     ensure_tab_visible(&mut self.dock_state, StudioTab::Console);
                 }
             }
+            "panel_settings" => {
+                if matches!(self.route, Route::Studio { .. }) {
+                    ensure_tab_visible(&mut self.dock_state, StudioTab::Settings);
+                }
+            }
+            "panel_agent" => {
+                if matches!(self.route, Route::Studio { .. }) {
+                    ensure_tab_visible(&mut self.dock_state, StudioTab::Agent);
+                }
+            }
+            "sync_bom" => {
+                if let Route::Studio { design_id } = self.route {
+                    self.sync_bom_from_schematic(design_id);
+                }
+            }
+            "export_bundle" => self.export_schematic_file("bundle"),
+            "export_bom" => self.export_schematic_file("bom_csv"),
+            "backup" => {
+                if let Route::Studio { design_id } = self.route {
+                    self.backup_current_design(design_id);
+                }
+            }
+            "cancel_build" => self.cancel_build(),
             _ => {}
         }
     }
@@ -122,6 +146,7 @@ const COMMAND_LIST: &[(&str, &str)] = &[
     ("export_netlist", "Export connectivity netlist"),
     ("export_sexp", "Export S-expression netlist"),
     ("export_pdf", "Export PDF plot"),
+    ("export_pdf_pack", "Export PDF pack (schematic + BOM + ERC)"),
     ("export_mcad", "Export MCAD handoff JSON"),
     ("duplicate", "Duplicate selection"),
     ("delete", "Delete selection"),
@@ -145,4 +170,11 @@ const COMMAND_LIST: &[(&str, &str)] = &[
     ("panel_research", "Panel: Research"),
     ("panel_3d", "Panel: Board preview (MCAD)"),
     ("panel_console", "Panel: Console"),
+    ("panel_settings", "Panel: Settings"),
+    ("panel_agent", "Panel: Agent"),
+    ("sync_bom", "Sync BOM from schematic"),
+    ("export_bundle", "Export design bundle"),
+    ("export_bom", "Export BOM CSV"),
+    ("backup", "Backup design to project folder"),
+    ("cancel_build", "Cancel AI build"),
 ];

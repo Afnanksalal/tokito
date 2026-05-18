@@ -7,6 +7,7 @@ impl App {
             &mut self.editor,
             &self.part_cache,
             self.base_symbols.as_ref(),
+            &self.ui_tokens,
         ) {
             self.log_console(msg);
         }

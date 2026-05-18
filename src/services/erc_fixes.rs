@@ -10,25 +10,57 @@ pub fn propose_fixes(doc: &SchematicDocument, violations: &[ErcViolation]) -> Sc
     let mut op_provenance = Vec::new();
 
     for v in violations {
-        if v.code.as_str() != "ERC_MISSING_FOOTPRINT" {
-            continue;
+        match v.code.as_str() {
+            "ERC_MISSING_FOOTPRINT" => {
+                let Some(refdes) = &v.instance_ref else {
+                    continue;
+                };
+                let Some(sym) = doc.symbols.iter().find(|s| s.ref_des == *refdes) else {
+                    continue;
+                };
+                let fp = guess_footprint(sym);
+                ops.push(SchematicEditOp::SetInstanceField {
+                    ref_des: refdes.clone(),
+                    field: "footprint".into(),
+                    value: fp.clone(),
+                    summary: format!("Assign footprint '{fp}' to {refdes}"),
+                });
+                op_provenance.push(EditProvenance::ErcFix {
+                    code: v.code.clone(),
+                });
+            }
+            "ERC_UNCONNECTED_PIN" => {
+                if let (Some(refdes), Some(pin)) = (&v.instance_ref, &v.pin_name) {
+                    let net = format!("NC_{refdes}_{pin}");
+                    ops.push(SchematicEditOp::ConnectPins {
+                        net_name: net,
+                        pins: vec![(refdes.clone(), pin.clone())],
+                        summary: format!("Isolate unconnected pin {refdes}.{pin}"),
+                    });
+                    op_provenance.push(EditProvenance::ErcFix {
+                        code: v.code.clone(),
+                    });
+                }
+            }
+            "ERC_DANGLING_LABEL" | "ERC_UNCONNECTED_LABEL" => {
+                if let Some(net) = &v.net_name {
+                    if let Some(label) = doc.net_labels.iter().find(|l| l.name == *net) {
+                        if let Some(sym) = doc.symbols.first() {
+                            ops.push(SchematicEditOp::ConnectPins {
+                                net_name: net.clone(),
+                                pins: vec![(sym.ref_des.clone(), "1".into())],
+                                summary: format!("Connect label {net} to {}/1 (review)", sym.ref_des),
+                            });
+                            op_provenance.push(EditProvenance::ErcFix {
+                                code: v.code.clone(),
+                            });
+                        }
+                        let _ = label;
+                    }
+                }
+            }
+            _ => {}
         }
-        let Some(refdes) = &v.instance_ref else {
-            continue;
-        };
-        let Some(sym) = doc.symbols.iter().find(|s| s.ref_des == *refdes) else {
-            continue;
-        };
-        let fp = guess_footprint(sym);
-        ops.push(SchematicEditOp::SetInstanceField {
-            ref_des: refdes.clone(),
-            field: "footprint".into(),
-            value: fp.clone(),
-            summary: format!("Assign footprint '{fp}' to {refdes}"),
-        });
-        op_provenance.push(EditProvenance::ErcFix {
-            code: v.code.clone(),
-        });
     }
 
     SchematicEditBatch {

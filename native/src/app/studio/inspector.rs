@@ -5,7 +5,7 @@ use tokito::models::NetLabelKind;
 
 impl App {
     pub(crate) fn render_studio_inspector_tab(&mut self, ui: &mut egui::Ui) {
-        let tokens = crate::ui::tokens::UiTokens::default();
+        let tokens = self.ui_tokens;
         let chrome = TabChrome::begin(ui, &tokens);
         chrome.header(ui, "Properties", None);
 
@@ -170,6 +170,30 @@ impl App {
                         if let Some(label) = self.editor.net_labels.get_mut(i) {
                             label.name = name;
                         }
+                    }
+                    ui.label(egui::RichText::new("Kind").small().weak());
+                    let mut kind = self.editor.net_labels[i].kind;
+                    egui::ComboBox::from_id_salt("inspector_label_kind")
+                        .selected_text(format!("{kind:?}"))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut kind, NetLabelKind::Local, "Local");
+                            ui.selectable_value(&mut kind, NetLabelKind::Global, "Global");
+                            ui.selectable_value(
+                                &mut kind,
+                                NetLabelKind::Hierarchical,
+                                "Hierarchical",
+                            );
+                        });
+                    if kind != self.editor.net_labels[i].kind {
+                        self.before_canvas_edit();
+                        self.editor.net_labels[i].kind = kind;
+                    }
+                    ui.label(egui::RichText::new("Rotation °").small().weak());
+                    let mut rot = self.editor.net_labels[i].rotation_deg;
+                    if ui.add(egui::DragValue::new(&mut rot).range(0.0..=270.0).speed(1.0)).changed()
+                    {
+                        self.before_canvas_edit();
+                        self.editor.net_labels[i].rotation_deg = rot;
                     }
                 });
             }

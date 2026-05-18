@@ -1,6 +1,8 @@
 //! Embedded PostgreSQL via pg-embed (local data dir, no Docker).
 
 mod embedded;
+mod pg_embed_util;
+pub mod pg_backup;
 
 use anyhow::Context;
 use sqlx::postgres::PgPoolOptions;
@@ -11,8 +13,26 @@ pub use embedded::EmbeddedPostgres;
 
 /// Start embedded Postgres, connect, run migrations, return pool (hold `EmbeddedPostgres` for process lifetime).
 pub async fn connect(cfg: &crate::config::Config) -> anyhow::Result<(PgPool, EmbeddedPostgres)> {
-    let data_dir = default_data_dir();
-    let embedded = EmbeddedPostgres::start(&data_dir, cfg.embedded_port).await?;
+    let settings = crate::settings::load_file();
+    let data_dir = crate::settings::postgres_data_dir(&settings);
+    connect_embedded_at(&data_dir, cfg).await
+}
+
+/// Per-project embedded Postgres (`{workspace}/.data/postgres`).
+pub async fn connect_project_embedded(
+    workspace: &std::path::Path,
+    cfg: &crate::config::Config,
+) -> anyhow::Result<(PgPool, EmbeddedPostgres)> {
+    let data_dir = crate::project_toml::ProjectToml::embedded_data_dir(workspace);
+    connect_embedded_at(&data_dir, cfg).await
+}
+
+async fn connect_embedded_at(
+    data_dir: &std::path::Path,
+    cfg: &crate::config::Config,
+) -> anyhow::Result<(PgPool, EmbeddedPostgres)> {
+    let embedded =
+        EmbeddedPostgres::start(data_dir, cfg.embedded_port, cfg.pg_embed_version).await?;
     let url = embedded.database_url();
     let pool = PgPoolOptions::new()
         .max_connections(cfg.db_max_connections)
@@ -26,9 +46,25 @@ pub async fn connect(cfg: &crate::config::Config) -> anyhow::Result<(PgPool, Emb
     Ok((pool, embedded))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabaseStatus {
+    Starting,
+    Ready,
+    Degraded,
+    Error,
+}
+
+pub async fn test_connection(pool: &PgPool) -> DatabaseStatus {
+    match sqlx::query("SELECT 1").execute(pool).await {
+        Ok(_) => DatabaseStatus::Ready,
+        Err(_) => DatabaseStatus::Error,
+    }
+}
+
+pub fn repair_cluster_dir(data_dir: &std::path::Path) -> anyhow::Result<()> {
+    embedded::reset_cluster_dir(data_dir)
+}
+
 pub fn default_data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("tokito")
-        .join("postgres")
+    crate::paths::default_postgres_data_dir()
 }

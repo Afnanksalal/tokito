@@ -29,9 +29,16 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Unit tests
-        run: cargo test
+        run: cargo test -p tokito -p tokito-native
 
-      - name: API integration tests
+      - name: Integration tests
         env:
           TOKITO_RUN_DB_INTEGRATION: "1"
-        run: cargo test --test api_designs --test api_parts --test api_schematic --test golden_document --test services_exports -- --nocapture
+        run: |
+          cargo test -p tokito \
+            --test api_designs --test api_parts --test api_schematic \
+            --test golden_document --test golden_netlist_move \
+            --test services_exports --test spec_compliance \
+            --test db_stability --test notes_research --test project_workspace \
+            --test ai_pipeline_fixtures \
+            -- --nocapture

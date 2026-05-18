@@ -115,8 +115,7 @@ fn nexar_offers_from_graphql(data: &Value) -> Vec<UpsertOffer> {
 pub async fn access_token(state: &AppState) -> AppResult<String> {
     let cfg = state.nexar.as_ref().ok_or_else(|| {
         AppError::Unavailable(
-            "Nexar is not configured; set TOKITO_NEXAR_CLIENT_ID and TOKITO_NEXAR_CLIENT_SECRET"
-                .into(),
+            crate::user_messages::NEXAR_NOT_CONFIGURED.into(),
         )
     })?;
     let cache = state

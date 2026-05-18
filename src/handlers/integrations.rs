@@ -1,4 +1,4 @@
-//! Proxies to optional third-party APIs (xAI, Firecrawl). Keys stay server-side.
+//! Server-side proxies for xAI and Firecrawl (API keys never sent to clients).
 
 use crate::auth::AuthUser;
 use crate::error::AppResult;

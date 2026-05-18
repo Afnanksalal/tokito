@@ -14,7 +14,11 @@ mod parts;
 pub use agent::run_agent;
 pub use auth::{create_api_key, delete_api_key, list_api_keys, login, register};
 pub use catalog::search_catalog;
-pub use copilot::{get_intent, list_research, put_intent, scrape_research, search_research};
+pub use copilot::{
+    create_research_annotation, create_research_note, delete_research_note, get_intent,
+    list_research, patch_research_note,
+    put_intent, scrape_research, search_research,
+};
 pub use designs::{
     append_bom, create_design, export_design, get_bom, get_design, get_schematic,
     get_schematic_document, list_designs, patch_design, put_bom, put_schematic,

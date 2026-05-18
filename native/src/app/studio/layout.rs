@@ -7,7 +7,7 @@ use crate::ui::layout::panel_frame;
 
 impl App {
     pub(crate) fn ui_studio(&mut self, ctx: &egui::Context, design_id: Uuid) {
-        let tokens = crate::ui::tokens::UiTokens::default();
+        let tokens = self.ui_tokens;
 
         // Keep the central dock wide enough; egui_dock panics on zero-width nodes.
         const CENTER_MIN: f32 = 360.0;
@@ -49,6 +49,8 @@ impl App {
                 });
         }
 
+        let net_hover = self.hovered_net_name(ctx);
+
         egui::TopBottomPanel::bottom("studio_status")
             .frame(egui::Frame::none().fill(tokens.bg_panel))
             .exact_height(26.0)
@@ -60,10 +62,14 @@ impl App {
                         .cursor_world
                         .map(|p| format!("{:.0}, {:.0}", p.x, p.y))
                         .unwrap_or_else(|| "—, —".into());
+                    let net_label = net_hover
+                        .as_deref()
+                        .unwrap_or("—");
                     ui.label(
                         egui::RichText::new(format!(
-                            "X/Y {}   Zoom {:.0}%   {}",
+                            "X/Y {}   Net {}   Zoom {:.0}%   {}",
                             cursor,
+                            net_label,
                             self.editor.viewport.zoom * 100.0,
                             self.editor.tool.label(),
                         ))
@@ -176,7 +182,7 @@ impl App {
         use crate::ui::widgets::ToolIcon;
         ui.vertical_centered(|ui| {
             ui.add_space(6.0);
-            let tools = [
+            let mut tools: Vec<(ToolIcon, CanvasTool, &str)> = vec![
                 (ToolIcon::Select, CanvasTool::Select, "Select (Q)"),
                 (ToolIcon::Place, CanvasTool::PlaceSymbol, "Place (A)"),
                 (ToolIcon::Wire, CanvasTool::Wire, "Wire (W)"),
@@ -186,9 +192,11 @@ impl App {
                 (ToolIcon::Junction, CanvasTool::Junction, "Junction (J)"),
                 (ToolIcon::NoConnect, CanvasTool::NoConnect, "No connect (X)"),
                 (ToolIcon::Bus, CanvasTool::Bus, "Bus (B)"),
+            ];
+            tools.extend([
                 (ToolIcon::Text, CanvasTool::Text, "Text (T)"),
                 (ToolIcon::Pan, CanvasTool::Pan, "Pan (H)"),
-            ];
+            ]);
             for (icon, tool, tip) in tools {
                 let selected = self.editor.tool == tool
                     || (tool == CanvasTool::PlaceSymbol

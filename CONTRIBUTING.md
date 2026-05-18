@@ -47,7 +47,7 @@ cargo test --workspace
 Integration tests that exercise the optional HTTP layer (embedded Postgres; set **`TOKITO_RUN_DB_INTEGRATION=1`**, first run may download binaries). CI sets this automatically.
 
 ```bash
-TOKITO_RUN_DB_INTEGRATION=1 cargo test -p tokito --test api_designs --test api_parts --test api_schematic
+TOKITO_RUN_DB_INTEGRATION=1 make test-db
 ```
 
 ---
@@ -57,7 +57,7 @@ TOKITO_RUN_DB_INTEGRATION=1 cargo test -p tokito --test api_designs --test api_p
 - **Small, focused commits** with messages that explain *why*, not only *what*.
 - **Match existing style** — modules, naming, error handling (`AppError`), SQLx patterns.
 - **Update docs** when behavior or env vars change — **`README.md`**, **`docs/ARCHITECTURE.md`**, **`docs/SCHEMATIC_EDITOR.md`** (editor), and **`docs/API.md`** (HTTP test surface).
-- **Never commit secrets** — use **`.env.example`** for new configuration knobs only.
+- **Never commit secrets** — document new settings keys in **`docs/SETTINGS.md`** only.
 
 ---
 

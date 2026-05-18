@@ -66,7 +66,7 @@ impl AppState {
             firecrawl: None,
             nexar: None,
             nexar_token_cache: None,
-            lcsc_anonymous_search: false,
+            lcsc_anonymous_search: true,
             agent: crate::config::AgentLimits {
                 max_iterations: 2,
                 max_llm_tokens_per_run: 4096,
@@ -152,6 +152,19 @@ pub fn build(
         .route(
             "/designs/:id/research/search",
             post(handlers::search_research),
+        )
+        .route(
+            "/designs/:id/research/notes",
+            post(handlers::create_research_note),
+        )
+        .route(
+            "/designs/:id/research/annotate",
+            post(handlers::create_research_annotation),
+        )
+        .route(
+            "/designs/:id/research/:artifact_id",
+            axum::routing::patch(handlers::patch_research_note)
+                .delete(handlers::delete_research_note),
         )
         .route("/designs/:id/export", get(handlers::export_design))
         .route(

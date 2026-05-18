@@ -3,8 +3,14 @@
 
 pub mod auth;
 pub mod config;
+pub mod config_provider;
 pub mod connectivity;
 pub mod db;
+pub mod paths;
+pub mod project_toml;
+pub mod settings;
+pub mod secrets;
+pub mod user_messages;
 pub mod error;
 pub mod handlers;
 pub mod models;

@@ -26,7 +26,7 @@ impl PlaceScope {
 
 impl App {
     pub(crate) fn render_studio_place_panel(&mut self, ui: &mut egui::Ui) {
-        let tokens = crate::ui::tokens::UiTokens::default();
+        let tokens = self.ui_tokens;
         let ty = crate::ui::TypeRamp::default();
         let chrome = crate::app::studio::chrome::TabChrome::begin(ui, &tokens);
         chrome.header(ui, "Place", None);
@@ -135,16 +135,11 @@ impl App {
 
     fn render_place_catalog(&mut self, ui: &mut egui::Ui, tokens: &crate::ui::tokens::UiTokens) {
         let ty = crate::ui::TypeRamp::default();
-        let lcsc_on = self.lcsc_catalog_enabled();
         let nexar_on = self.state.nexar.is_some();
-        let status = if lcsc_on && nexar_on {
-            "LCSC + Nexar catalog search enabled"
-        } else if lcsc_on {
-            "LCSC catalog search enabled"
-        } else if nexar_on {
-            "Nexar catalog search enabled (LCSC off — set TOKITO_LCSC_ANONYMOUS_SEARCH=true)"
+        let status = if nexar_on {
+            "LCSC + Nexar catalog search"
         } else {
-            "Catalog disabled — enable LCSC in .env (TOKITO_LCSC_ANONYMOUS_SEARCH=true)"
+            "LCSC catalog search"
         };
         ui.label(ty.small_weak(status).color(tokens.text_muted));
         ui.add_space(6.0);
@@ -153,9 +148,6 @@ impl App {
                 ty.small_weak("Type MPN or keyword above (search runs automatically).")
                     .color(tokens.text_muted),
             );
-            return;
-        }
-        if !lcsc_on && !nexar_on {
             return;
         }
         if self.catalog_hits.is_empty() {
@@ -396,7 +388,7 @@ impl App {
                 ui.set_min_height(40.0);
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(52.0, 36.0), egui::Sense::hover());
-                paint_preview_primitive(ui, self.base_symbols.as_ref(), rect, kind);
+                paint_preview_primitive(ui, &tokens, self.base_symbols.as_ref(), rect, kind);
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new(label).size(12.0));
                     ui.label(
@@ -427,7 +419,7 @@ impl App {
         let name_owned = name.to_string();
         let placed = place_list_row(ui, tokens, |ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(52.0, 36.0), egui::Sense::hover());
-            paint_preview_symbol(ui, self.base_symbols.as_ref(), rect, Some(name));
+            paint_preview_symbol(ui, tokens, self.base_symbols.as_ref(), rect, Some(name));
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(short).monospace().strong());
                 if name.contains(':') {
@@ -556,11 +548,11 @@ fn place_list_row(
 
 fn paint_preview_symbol(
     ui: &egui::Ui,
+    tokens: &crate::ui::tokens::UiTokens,
     lib: Option<&crate::base_symbols::BaseSymbolLibrary>,
     rect: egui::Rect,
     library_id_or_kind: Option<&str>,
 ) {
-    let tokens = crate::ui::tokens::UiTokens::default();
     ui.painter().rect_filled(rect, 3.0, tokens.preview_bg);
     ui.painter()
         .rect_stroke(rect.shrink(0.5), 3.0, tokens.stroke_subtle);
@@ -606,11 +598,11 @@ fn paint_preview_symbol(
 
 fn paint_preview_primitive(
     ui: &egui::Ui,
+    tokens: &crate::ui::tokens::UiTokens,
     lib: Option<&crate::base_symbols::BaseSymbolLibrary>,
     rect: egui::Rect,
     kind: CompKind,
 ) {
-    let tokens = crate::ui::tokens::UiTokens::default();
     ui.painter().rect_filled(rect, 3.0, tokens.preview_bg);
     ui.painter()
         .rect_stroke(rect.shrink(0.5), 3.0, tokens.stroke_subtle);

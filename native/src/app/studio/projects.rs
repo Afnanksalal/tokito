@@ -1,10 +1,11 @@
 use std::collections::HashSet;
 
 use crate::app::{App, ProjectsSort};
+use tokito::models::CreateProject;
 
 impl App {
     pub(crate) fn ui_projects(&mut self, ctx: &egui::Context) {
-        let tokens = crate::ui::tokens::UiTokens::default();
+        let tokens = self.ui_tokens;
         let ty = crate::ui::TypeRamp::default();
 
         egui::CentralPanel::default()
@@ -16,7 +17,7 @@ impl App {
                     ui.add_space(12.0);
                     ui.label(
                         ty.small_weak(
-                            "Hardware design workspace — open a project or create a new schematic",
+                            "Projects group designs — pick a project, then open or create a schematic",
                         )
                         .color(tokens.text_muted),
                     );
@@ -25,7 +26,56 @@ impl App {
 
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
-                        ui.set_max_width(300.0);
+                        ui.set_max_width(280.0);
+                        crate::ui::layout::content_card(ui, &tokens, |ui| {
+                            ui.label(ty.section("Projects").color(tokens.text_primary));
+                            ui.add_space(6.0);
+                            ui.label(egui::RichText::new("New project").small().weak());
+                            ui.text_edit_singleline(&mut self.new_project_name);
+                            ui.checkbox(
+                                &mut self.new_project_embedded_db,
+                                "Isolated database (per-project Postgres)",
+                            );
+                            ui.add_space(8.0);
+                            if crate::ui::widgets::primary_button(ui, &tokens, "Create project")
+                                .clicked()
+                            {
+                                let name = self.new_project_name.trim().to_string();
+                                if name.is_empty() {
+                                    self.set_err("Project name is required");
+                                } else {
+                                    let res = self.rt.block_on(async {
+                                        tokito::store::projects::create(
+                                            &self.pool,
+                                            CreateProject { name },
+                                        )
+                                        .await
+                                    });
+                                    match res {
+                                        Ok(p) => {
+                                            self.new_project_name.clear();
+                                            if self.new_project_embedded_db {
+                                                let ws = std::path::PathBuf::from(&p.workspace_path);
+                                                let mut meta =
+                                                    tokito::project_toml::read(&ws).unwrap_or_default();
+                                                meta.id = Some(p.id);
+                                                meta.name = p.name.clone();
+                                                meta.slug = p.slug.clone();
+                                                meta.database.mode = "embedded".into();
+                                                let _ = tokito::project_toml::write(&ws, &meta);
+                                            }
+                                            self.active_project_id = Some(p.id);
+                                            self.projects_list_dirty = true;
+                                            self.refresh_projects();
+                                            self.reload_projects();
+                                            self.toast_ok("Project created");
+                                        }
+                                        Err(e) => self.set_err(e.to_string()),
+                                    }
+                                }
+                            }
+                        });
+                        ui.add_space(12.0);
                         crate::ui::layout::content_card(ui, &tokens, |ui| {
                             ui.label(ty.section("New design").color(tokens.text_primary));
                             ui.add_space(8.0);
@@ -43,6 +93,7 @@ impl App {
                                     self.set_err("Name is required");
                                 } else {
                                     let desc = self.new_design_desc.trim().to_string();
+                                    let project_id = self.active_project_id;
                                     let res = self.rt.block_on(async {
                                         tokito::store::designs::create(
                                             &self.pool,
@@ -53,6 +104,7 @@ impl App {
                                                 } else {
                                                     Some(desc)
                                                 },
+                                                project_id,
                                             },
                                             self.user_id,
                                         )
@@ -71,12 +123,22 @@ impl App {
                         });
                     });
 
-                    ui.add_space(24.0);
+                    ui.add_space(16.0);
 
                     ui.vertical(|ui| {
                         ui.set_min_width(560.0);
                         ui.horizontal(|ui| {
                             ui.label(ty.section("Your designs").color(tokens.text_primary));
+                            if let Some(pid) = self.active_project_id {
+                                if let Some(p) = self.projects.iter().find(|p| p.id == pid) {
+                                    ui.label(
+                                        egui::RichText::new(format!("in {}", p.name))
+                                            .small()
+                                            .weak()
+                                            .color(tokens.text_muted),
+                                    );
+                                }
+                            }
                         });
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
@@ -181,7 +243,7 @@ impl App {
                                     crate::ui::layout::empty_state(
                                         ui,
                                         &tokens,
-                                        "No designs yet — create one on the left.",
+                                        "No designs in this project — create one on the left.",
                                     );
                                     return;
                                 }
@@ -262,6 +324,100 @@ impl App {
                                 render_section(ui, self, "Recent", &recent);
                                 render_section(ui, self, "All designs", &others);
                             });
+                    });
+
+                    ui.add_space(16.0);
+
+                    ui.vertical(|ui| {
+                        ui.set_max_width(220.0);
+                        crate::ui::layout::content_card(ui, &tokens, |ui| {
+                            ui.label(ty.section("Project list").color(tokens.text_primary));
+                            ui.add_space(6.0);
+                            egui::ScrollArea::vertical()
+                                .id_salt("project_list")
+                                .max_height(360.0)
+                                .show(ui, |ui| {
+                                    for p in self.projects.clone() {
+                                        let active = self.active_project_id == Some(p.id);
+                                        if ui
+                                            .selectable_label(
+                                                active,
+                                                egui::RichText::new(&p.name).size(13.0),
+                                            )
+                                            .clicked()
+                                        {
+                                            self.active_project_id = Some(p.id);
+                                            self.reload_projects();
+                                        }
+                                    }
+                                });
+                            ui.add_space(6.0);
+                            if let Some(pid) = self.active_project_id {
+                                ui.horizontal(|ui| {
+                                    if crate::ui::widgets::secondary_button(
+                                        ui,
+                                        &tokens,
+                                        "Export project zip",
+                                    )
+                                    .clicked()
+                                    {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .set_file_name("project.zip")
+                                            .save_file()
+                                        {
+                                            let uid = self.user_id;
+                                            let db_url = self.db_url.clone();
+                                            let pg_ver =
+                                                self.settings_file.database.pg_embed_version;
+                                            let res = self.rt.block_on(
+                                                tokito::services::project_archive::export_project_zip(
+                                                    &self.pool,
+                                                    pid,
+                                                    uid,
+                                                    &path,
+                                                    Some(&db_url),
+                                                    pg_ver,
+                                                ),
+                                            );
+                                            match res {
+                                                Ok(()) => self.toast_ok("Project exported"),
+                                                Err(e) => self.set_err(e.to_string()),
+                                            }
+                                        }
+                                    }
+                                    if crate::ui::widgets::secondary_button(
+                                        ui,
+                                        &tokens,
+                                        "Import project zip",
+                                    )
+                                    .clicked()
+                                    {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Zip", &["zip"])
+                                            .pick_file()
+                                        {
+                                            let uid = self.user_id;
+                                            let res = self.rt.block_on(
+                                                tokito::services::project_archive::import_project_zip(
+                                                    &self.pool,
+                                                    &path,
+                                                    uid,
+                                                ),
+                                            );
+                                            match res {
+                                                Ok(id) => {
+                                                    self.active_project_id = Some(id);
+                                                    self.refresh_projects();
+                                                    self.reload_projects();
+                                                    self.toast_ok("Project imported");
+                                                }
+                                                Err(e) => self.set_err(e.to_string()),
+                                            }
+                                        }
+                                    }
+                                });
+                            }
+                        });
                     });
                 });
             });

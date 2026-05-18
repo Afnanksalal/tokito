@@ -1,11 +1,13 @@
 //! Schematic editor: viewport, rendering, hit-testing, and interaction.
 
+mod annot_graphics;
 mod commands;
 pub mod connectivity;
 pub mod document;
 mod geometry;
 mod hit_test;
 mod interaction;
+mod label_placement;
 mod junctions;
 pub mod live_erc;
 mod net_sync;
@@ -44,8 +46,8 @@ pub fn show(
     editor: &mut SchematicEditor,
     part_cache: &HashMap<Uuid, String>,
     symbol_lib: Option<&BaseSymbolLibrary>,
+    tokens: &UiTokens,
 ) -> Option<String> {
-    let tokens = UiTokens::default();
 
     let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
     if resp.clicked() || resp.drag_started() {

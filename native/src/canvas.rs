@@ -345,6 +345,7 @@ pub struct NetLabel {
     pub name: String,
     pub pos: Pos2,
     pub kind: tokito::models::NetLabelKind,
+    pub rotation_deg: f32,
 }
 
 #[derive(Clone)]

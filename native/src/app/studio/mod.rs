@@ -14,5 +14,7 @@ mod place_panel;
 pub use place_panel::PlaceScope;
 mod projects;
 mod research;
+mod agent;
+mod settings;
 mod shortcuts;
 mod viewer3d;

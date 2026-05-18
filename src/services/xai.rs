@@ -28,7 +28,7 @@ pub fn usage_tokens(resp: &Value) -> (i64, i64) {
 pub async fn chat_completion(state: &AppState, body: Value) -> AppResult<Value> {
     let Some(xai) = state.xai.as_ref() else {
         return Err(AppError::Unavailable(
-            "xAI is not configured; set TOKITO_XAI_API_KEY".into(),
+            crate::user_messages::XAI_NOT_CONFIGURED.into(),
         ));
     };
     let url = join_base_path(&xai.base_url, "chat/completions");

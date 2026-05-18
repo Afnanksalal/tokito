@@ -21,17 +21,15 @@ $AssetsSrc = Join-Path $Root "assets"
 $AssetsDst = Join-Path $Out "assets"
 Copy-Item -Recurse $AssetsSrc $AssetsDst
 
-Copy-Item (Join-Path $Root ".env.example") (Join-Path $Out ".env.example")
-
 @"
 Tokito — desktop schematic studio. Describe the board; AI drafts; you refine.
 
-1. Copy .env.example to .env beside Tokito.exe
-2. Set TOKITO_XAI_API_KEY and TOKITO_FIRECRAWL_API_KEY (required for AI build)
-3. Double-click Tokito.exe
-4. First launch may prepare the local database (internet needed once)
+1. Double-click Tokito.exe (keep the assets folder beside it)
+2. Open Settings and add your xAI and Firecrawl API keys
+3. First launch may prepare the local database (internet needed once)
 
 Your designs: %LOCALAPPDATA%\tokito\
+See docs/SETTINGS.md in the source repo for all keys.
 "@ | Set-Content -Encoding UTF8 (Join-Path $Out "README.txt")
 
 Write-Host ""

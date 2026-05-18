@@ -16,10 +16,12 @@ pub enum StudioTab {
     Research,
     Viewer3d,
     Console,
+    Settings,
+    Agent,
 }
 
 impl StudioTab {
-    pub const DOCK_TABS: [StudioTab; 8] = [
+    pub const DOCK_TABS: [StudioTab; 10] = [
         StudioTab::Canvas,
         StudioTab::Build,
         StudioTab::DesignManager,
@@ -28,10 +30,12 @@ impl StudioTab {
         StudioTab::Research,
         StudioTab::Viewer3d,
         StudioTab::Console,
+        StudioTab::Settings,
+        StudioTab::Agent,
     ];
 
     /// Tabs the user can add from the dock “+” menu (Schematic stays singleton via non-closable root).
-    pub const ADDABLE_TABS: [StudioTab; 7] = [
+    pub const ADDABLE_TABS: [StudioTab; 9] = [
         StudioTab::Build,
         StudioTab::DesignManager,
         StudioTab::Bom,
@@ -39,6 +43,8 @@ impl StudioTab {
         StudioTab::Research,
         StudioTab::Viewer3d,
         StudioTab::Console,
+        StudioTab::Settings,
+        StudioTab::Agent,
     ];
 
     pub const fn panel_label(self) -> &'static str {
@@ -51,6 +57,8 @@ impl StudioTab {
             StudioTab::Research => "Research",
             StudioTab::Viewer3d => "Preview",
             StudioTab::Console => "Console",
+            StudioTab::Settings => "Settings",
+            StudioTab::Agent => "Agent",
         }
     }
 }
@@ -111,12 +119,14 @@ impl TabViewer for AppDockViewer {
         match tab {
             StudioTab::Canvas => app.render_studio_canvas_tab(ui, self.design_id),
             StudioTab::Build => app.render_studio_build_tab(ui, self.design_id),
-            StudioTab::DesignManager => app.render_studio_design_manager_tab(ui),
+            StudioTab::DesignManager => app.render_studio_design_manager_tab(ui, self.design_id),
             StudioTab::Bom => app.render_studio_bom_tab(ui, self.design_id),
             StudioTab::Messages => app.render_studio_messages_tab(ui),
             StudioTab::Research => app.render_studio_research_tab(ui, self.design_id),
             StudioTab::Viewer3d => app.render_studio_viewer3d_tab(ui, &ctx),
             StudioTab::Console => app.render_studio_console_tab(ui),
+            StudioTab::Settings => app.render_studio_settings_tab(ui, &ctx),
+            StudioTab::Agent => app.render_studio_agent_tab(ui, self.design_id),
         }
     }
 

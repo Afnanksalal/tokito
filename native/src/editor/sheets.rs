@@ -154,6 +154,8 @@ pub fn flush_active_sheet(
                 x: m.position.x as f64,
                 y: m.position.y as f64,
             },
+            instance_ref: m.instance_ref.clone(),
+            net_name: m.net_name.clone(),
         }));
 }
 
@@ -209,6 +211,7 @@ pub fn hydrate_active_sheet(editor: &mut SchematicEditor, doc: &SchematicDocumen
             name: l.name.clone(),
             pos: Pos2::new(l.position.x as f32, l.position.y as f32),
             kind: l.kind,
+            rotation_deg: orientation_to_deg(l.orientation),
         })
         .collect();
     editor.junctions = doc
@@ -264,8 +267,8 @@ pub fn hydrate_active_sheet(editor: &mut SchematicEditor, doc: &SchematicDocumen
             message: m.message.clone(),
             severity: m.severity.clone(),
             position: Pos2::new(m.position.x as f32, m.position.y as f32),
-            instance_ref: None,
-            net_name: None,
+            instance_ref: m.instance_ref.clone(),
+            net_name: m.net_name.clone(),
         })
         .collect();
     editor.sync_anchored_wire_endpoints();
@@ -393,5 +396,14 @@ fn default_document_pin(pin_name: &str) -> DocumentPin {
             PinOrientation::Left
         },
         visible: true,
+    }
+}
+
+fn orientation_to_deg(o: PinOrientation) -> f32 {
+    match o {
+        PinOrientation::Right => 0.0,
+        PinOrientation::Up => 90.0,
+        PinOrientation::Left => 180.0,
+        PinOrientation::Down => 270.0,
     }
 }

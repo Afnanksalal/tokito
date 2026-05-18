@@ -465,6 +465,29 @@ impl SchematicEditor {
         Some(self.snap_world(p))
     }
 
+    pub fn hovered_net_at_pointer(&self, ctx: &egui::Context) -> Option<String> {
+        use super::hit_test::pick_wire_segment;
+        let rect = self.screen_rect?;
+        let pointer = ctx.input(|i| i.pointer.hover_pos())?;
+        if !rect.contains(pointer) {
+            return None;
+        }
+        let origin = rect.min;
+        let i = pick_wire_segment(
+            pointer,
+            origin,
+            &self.viewport,
+            &self.wire_segments,
+            14.0,
+        )?;
+        let net = self.wire_segments.get(i)?.net.trim();
+        if net.is_empty() {
+            None
+        } else {
+            Some(net.to_string())
+        }
+    }
+
     pub fn endpoint_world(&self, endpoint: &PinEndpoint) -> Option<Pos2> {
         let sym = self
             .symbols
