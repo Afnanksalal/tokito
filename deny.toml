@@ -24,7 +24,6 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
-    "Unicode-DFS-2016",
     "Unicode-3.0",
     "Zlib",
     "MPL-2.0",
@@ -34,11 +33,18 @@ allow = [
     "BSL-1.0",
 ]
 confidence-threshold = 0.8
-exceptions = []
+# libbz2-rs-sys uses the upstream libbzip2 license string `bzip2-1.0.6`, which
+# is not a standard SPDX identifier — scope the exemption to that crate only.
+exceptions = [
+    { allow = ["bzip2-1.0.6"], name = "libbz2-rs-sys" },
+]
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# The `tokito` dev-dependency uses a path with no version (`tokito = { path = "." }`),
+# which cargo-deny otherwise flags as a wildcard.
+allow-wildcard-paths = true
 highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
