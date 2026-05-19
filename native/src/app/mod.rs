@@ -1293,7 +1293,7 @@ impl App {
             return;
         }
         self.before_canvas_edit();
-        for (op, on) in batch.ops.into_iter().zip(selected.into_iter()) {
+        for (op, on) in batch.ops.into_iter().zip(selected) {
             if !on {
                 continue;
             }

@@ -34,7 +34,7 @@ pub fn paint_grid(painter: &Painter, rect: Rect, editor: &SchematicEditor, token
     let mut x = start_x;
     let mut ix = 0usize;
     while x < rect.max.x {
-        let color = if ix % 5 == 0 {
+        let color = if ix.is_multiple_of(5) {
             major_grid_color
         } else {
             grid_color
@@ -49,7 +49,7 @@ pub fn paint_grid(painter: &Painter, rect: Rect, editor: &SchematicEditor, token
     let mut y = start_y;
     let mut iy = 0usize;
     while y < rect.max.y {
-        let color = if iy % 5 == 0 {
+        let color = if iy.is_multiple_of(5) {
             major_grid_color
         } else {
             grid_color
