@@ -47,7 +47,7 @@ glam = "0.29"
 rfd = "0.15"
 open = "5"
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1.1"
 dark-light = "2"
 
 [[bin]]
