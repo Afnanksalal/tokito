@@ -81,8 +81,7 @@ fn bom_table_stream(bom_csv: &str, design_name: &str) -> String {
     ));
     y -= 28.0;
     stream.push_str(&format!(
-        "BT /F1 9 Tf {:.2} {:.2} Td (MPN    Qty    Notes) Tj ET\n",
-        MARGIN, y
+        "BT /F1 9 Tf {MARGIN:.2} {y:.2} Td (MPN    Qty    Notes) Tj ET\n"
     ));
     y -= 16.0;
     for line in bom_csv.lines().skip(1).take(48) {
@@ -113,8 +112,7 @@ fn erc_summary_stream(erc: &[ErcViolation], design_name: &str) -> String {
     y -= 28.0;
     if erc.is_empty() {
         stream.push_str(&format!(
-            "BT /F1 10 Tf {:.2} {:.2} Td (No ERC violations.) Tj ET\n",
-            MARGIN, y
+            "BT /F1 10 Tf {MARGIN:.2} {y:.2} Td (No ERC violations.) Tj ET\n"
         ));
         return stream;
     }
@@ -184,7 +182,7 @@ fn build_pdf_multipage(pages: &[(String, f64, f64)]) -> Vec<u8> {
     pdf.push_str(&format!("xref\n0 {}\n", objects.len() + 1));
     pdf.push_str("0000000000 65535 f \n");
     for off in &offsets[1..] {
-        pdf.push_str(&format!("{:010} 00000 n \n", off));
+        pdf.push_str(&format!("{off:010} 00000 n \n"));
     }
     pdf.push_str(&format!(
         "trailer<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_start}\n%%EOF\n",

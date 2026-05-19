@@ -65,7 +65,8 @@ fn document_wire_segments_derive_pin_connectivity() {
     ];
     let (body, diags) = doc.to_replace_schematic();
     assert!(diags.is_empty() || diags.iter().all(|d| !d.code.contains("ERROR")));
-    assert!(body.pins.iter().any(|p| p.net_name == "NET1"));
+    // SchematicPinInput has no UUID fields, so no redaction needed.
+    insta::assert_yaml_snapshot!("derived_pin_connectivity", body.pins);
 }
 
 #[test]
@@ -92,5 +93,9 @@ fn replace_schematic_round_trips_through_document() {
     let doc = SchematicDocument::from_replace_schematic(&replace);
     let (back, _) = doc.to_replace_schematic();
     assert_eq!(back.instances.len(), 1);
-    assert!(back.pins.iter().any(|p| p.net_name == "VCC"));
+    insta::assert_yaml_snapshot!("round_tripped_replace", back, {
+        ".instances[].id" => "[uuid]",
+        ".instances[].part_id" => "[uuid]",
+        ".nets[].id" => "[uuid]",
+    });
 }

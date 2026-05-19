@@ -1,0 +1,25 @@
+---
+source: tests/integration/golden_document.rs
+expression: back
+---
+instances:
+  - id: "[uuid]"
+    part_id: "[uuid]"
+    ref_des: U1
+    position:
+      x: 80
+      y: 80
+    rotation: 0
+    meta:
+      fields: {}
+      footprint_ref: ~
+      mirror: none
+      symbol_id: ~
+      value: ~
+nets:
+  - id: "[uuid]"
+    name: VCC
+pins:
+  - instance_ref: U1
+    pin_name: "1"
+    net_name: VCC

@@ -307,8 +307,7 @@ fn extract_archive(mut archive: ZipArchive<File>, prefix: &str) -> AppResult<Sco
         total = total.saturating_add(file.size());
         if total > MAX_EXTRACTED_BYTES {
             return Err(AppError::BadRequest(format!(
-                "zip expands beyond {} bytes",
-                MAX_EXTRACTED_BYTES
+                "zip expands beyond {MAX_EXTRACTED_BYTES} bytes"
             )));
         }
         let name = file

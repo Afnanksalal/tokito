@@ -4,7 +4,7 @@ use crate::models::{BomLineInput, ReplaceSchematic};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ProposedBomLine {
     pub part_id: Uuid,
     pub quantity: f64,

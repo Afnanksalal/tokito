@@ -1,6 +1,5 @@
 //! Shared helpers for integration tests (`test-support` feature).
-
-#![cfg(feature = "test-support")]
+//! Gating happens in `lib.rs` via `#[cfg(feature = "test-support")] pub mod test_support;`.
 
 use anyhow::Context;
 use axum::Router;
@@ -17,7 +16,7 @@ static EMBEDDED: std::sync::OnceLock<Mutex<Option<db::EmbeddedPostgres>>> =
 
 /// HTTP integration tests that start embedded PostgreSQL (pg-embed downloads and extracts binaries).
 ///
-/// Set **`TOKITO_RUN_DB_INTEGRATION=1`** to run them locally. CI sets this automatically.
+/// Set **`TOKITO_RUN_DB_INTEGRATION=1`** to run them locally. CI sets this for the Linux job.
 pub fn database_integration_tests_enabled() -> bool {
     matches!(
         std::env::var("TOKITO_RUN_DB_INTEGRATION")
@@ -26,7 +25,7 @@ pub fn database_integration_tests_enabled() -> bool {
             .map(|s| s.to_ascii_lowercase())
             .as_deref(),
         Some("1") | Some("true") | Some("yes")
-    ) || std::env::var("GITHUB_ACTIONS").ok().as_deref() == Some("true")
+    )
 }
 
 /// Postgres pool for integration tests (embedded pg-embed under the temp dir).
@@ -58,12 +57,24 @@ pub async fn test_pool() -> anyhow::Result<PgPool> {
     Ok(pool)
 }
 
-/// Bearer token for a test user (created on first call).
+/// Bearer token for a fresh test user (unique email per call — avoids cross-test
+/// pollution where an assertion like `list.len() == 1` would otherwise race when
+/// every test shares the same identity in the embedded Postgres.
 pub async fn test_bearer(pool: &PgPool, jwt_secret: &str) -> anyhow::Result<String> {
+    let email = format!("it-{}@tokito.local", uuid::Uuid::new_v4().simple());
+    test_bearer_for(pool, jwt_secret, &email).await
+}
+
+/// Like [`test_bearer`] but with an explicit email — use when a test needs a
+/// stable identity (e.g. asserting the same user across multiple requests).
+pub async fn test_bearer_for(
+    pool: &PgPool,
+    jwt_secret: &str,
+    email: &str,
+) -> anyhow::Result<String> {
     use crate::auth::encode_session_jwt;
     use crate::store::account;
 
-    let email = "integration-test@tokito.local";
     let user = match account::find_user_by_email(pool, email).await? {
         Some(u) => u,
         None => {

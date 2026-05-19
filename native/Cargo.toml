@@ -17,7 +17,6 @@ dead_code = "allow"
 too_many_arguments = "allow"
 type_complexity = "allow"
 collapsible_if = "allow"
-manual_is_multiple_of = "allow"
 needless_borrow = "allow"
 needless_borrows_for_generic_args = "allow"
 

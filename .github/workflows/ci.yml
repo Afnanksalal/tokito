@@ -15,14 +15,76 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  INSTA_UPDATE: "no"
 
 jobs:
-  rust:
-    runs-on: ubuntu-latest
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    env:
+      # Embedded Postgres integration tests run only on Linux. pg-embed on
+      # Windows is slow/fragile (see scripts/test.ps1 LNK1104 workaround).
+      TOKITO_RUN_DB_INTEGRATION: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install native Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libx11-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libwayland-dev
+
+      - uses: dtolnay/rust-toolchain@98e1b82157cd469e843cb7f524c1313b4ad9492c # 1.88
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2
+        with:
+          tool: cargo-nextest
+
+      - name: Check lockfile and workspace
+        run: cargo check --workspace --locked
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Tests (nextest)
+        run: cargo nextest run --workspace --locked --profile ci
+
+      - name: Doctests
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --workspace --doc --locked
+
+  coverage:
+    name: coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TOKITO_RUN_DB_INTEGRATION: "1"
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Install native Linux dependencies
         run: |
@@ -36,33 +98,35 @@ jobs:
             libxkbcommon-dev \
             libwayland-dev
 
-      - uses: dtolnay/rust-toolchain@1.88
+      - uses: dtolnay/rust-toolchain@98e1b82157cd469e843cb7f524c1313b4ad9492c # 1.88
         with:
-          components: rustfmt, clippy
+          components: llvm-tools-preview
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
-      - name: Check lockfile and workspace
-        run: cargo check --workspace --locked
+      - name: Install cargo-llvm-cov + nextest
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
 
-      - name: Format
-        run: cargo fmt --all -- --check
+      - name: Generate coverage
+        run: cargo llvm-cov nextest --workspace --locked --codecov --output-path codecov.json
 
-      - name: Clippy
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        with:
+          files: codecov.json
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
-      - name: Unit tests
-        run: cargo test --workspace --locked
-
-      - name: Integration tests
-        env:
-          TOKITO_RUN_DB_INTEGRATION: "1"
-        run: |
-          cargo test --locked -p tokito \
-            --test api_designs --test api_parts --test api_schematic \
-            --test golden_document --test golden_netlist_move \
-            --test services_exports --test spec_compliance \
-            --test db_stability --test notes_research --test project_workspace \
-            --test ai_pipeline_fixtures \
-            -- --nocapture
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: EmbarkStudios/cargo-deny-action@6c8f9facfa5047ec02d8485b6bf52b587b7777d1 # v2
+        with:
+          command: check
+          arguments: --all-features

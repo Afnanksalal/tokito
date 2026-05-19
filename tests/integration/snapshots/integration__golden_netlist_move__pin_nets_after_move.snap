@@ -1,0 +1,6 @@
+---
+source: tests/integration/golden_netlist_move.rs
+expression: after
+---
+- "R1:1:SIGNAL"
+- "R1:2:SIGNAL"
