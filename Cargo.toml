@@ -54,10 +54,18 @@ keyring = "3"
 
 [dev-dependencies]
 http-body-util = "0.1"
+insta = { version = "1", features = ["json", "yaml", "redactions"] }
 serde_json = "1"
 tokito = { path = ".", features = ["test-support"] }
 tower = { version = "0.5", features = ["util"] }
 zip = "8.6"
+
+# Single custom-harness binary that owns the embedded-Postgres lifecycle and
+# all integration submodules. Replaces the previous 11 separate test binaries.
+[[test]]
+name = "integration"
+path = "tests/integration/main.rs"
+harness = true
 
 [profile.release]
 lto = true

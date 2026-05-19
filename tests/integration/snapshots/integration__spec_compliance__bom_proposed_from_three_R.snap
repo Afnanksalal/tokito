@@ -1,0 +1,7 @@
+---
+source: tests/integration/spec_compliance.rs
+expression: proposed
+---
+- part_id: "[uuid]"
+  quantity: 3
+  notes: ~

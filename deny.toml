@@ -1,0 +1,60 @@
+# cargo-deny configuration. Run locally: `cargo deny check`.
+# Severity is tuned for "start fast, tighten later": advisories deny;
+# license / multiple-version issues warn until the tree is audited.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/RustSec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive set used by Rust ecosystem; extend deliberately.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "0BSD",
+    "BSL-1.0",
+]
+confidence-threshold = 0.8
+# libbz2-rs-sys uses the upstream libbzip2 license string `bzip2-1.0.6`, which
+# is not a standard SPDX identifier — scope the exemption to that crate only.
+exceptions = [
+    { allow = ["bzip2-1.0.6"], name = "libbz2-rs-sys" },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The `tokito` dev-dependency uses a path with no version (`tokito = { path = "." }`),
+# which cargo-deny otherwise flags as a wildcard.
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

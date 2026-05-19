@@ -16,7 +16,7 @@ impl App {
 
         let prompt_focused = ctx.memory(|m| {
             m.focused()
-                .map(|id| format!("{:?}", id).contains("prompt"))
+                .map(|id| format!("{id:?}").contains("prompt"))
                 .unwrap_or(false)
         });
 
