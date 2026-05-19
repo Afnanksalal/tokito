@@ -1,0 +1,10 @@
+---
+source: tests/integration/golden_document.rs
+expression: body.pins
+---
+- instance_ref: R1
+  pin_name: "1"
+  net_name: NET1
+- instance_ref: R1
+  pin_name: "2"
+  net_name: NET1

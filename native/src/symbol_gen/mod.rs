@@ -182,11 +182,6 @@ fn semiconductor_3pin(name: &str, desc: &str, ref_pre: &str) -> String {
 				(number "3" (effects (font (size 1.27 1.27))))))
 	)
 {FOOTER}"#,
-        HEADER = HEADER,
-        FOOTER = FOOTER,
-        name = name,
-        desc = desc,
-        ref_pre = ref_pre,
     )
 }
 
@@ -324,19 +319,15 @@ fn dual_row_ic(name: &str, pins: usize, desc: &str, ref_pre: &str) -> String {
         if n_left <= pins {
             body.push_str(&format!(
                 r#"			(pin input line (at -7.62 {y} 0) (length 2.54)
-				(number "{n}" (effects (font (size 1.27 1.27)))))
+				(number "{n_left}" (effects (font (size 1.27 1.27)))))
 "#,
-                y = y,
-                n = n_left,
             ));
         }
         if n_right <= pins {
             body.push_str(&format!(
                 r#"			(pin input line (at 7.62 {y} 180) (length 2.54)
-				(number "{n}" (effects (font (size 1.27 1.27)))))
+				(number "{n_right}" (effects (font (size 1.27 1.27)))))
 "#,
-                y = y,
-                n = n_right,
             ));
         }
     }
@@ -375,10 +366,5 @@ fn regulator_3pin(name: &str, desc: &str, fp: &str) -> String {
 				(number "3" (effects (font (size 1.27 1.27))))))
 	)
 {FOOTER}"#,
-        HEADER = HEADER,
-        FOOTER = FOOTER,
-        name = name,
-        desc = desc,
-        fp = fp,
     )
 }

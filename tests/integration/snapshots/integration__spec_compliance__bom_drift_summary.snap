@@ -1,0 +1,9 @@
+---
+source: tests/integration/spec_compliance.rs
+expression: s
+---
+in_sync: false
+db_line_count: 0
+proposed_line_count: 1
+quantity_delta: 1
+message: "BOM has 0 line(s), schematic suggests 1 (qty -0 vs 1)"

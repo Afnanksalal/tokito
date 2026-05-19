@@ -73,6 +73,7 @@ fn bom_diff_summary_detects_drift() {
     };
     let s = bom_sync::diff_summary(&lines, &body);
     assert!(!s.in_sync);
+    insta::assert_yaml_snapshot!("bom_drift_summary", s);
 }
 
 #[test]
@@ -95,4 +96,7 @@ fn bom_sync_quantity_from_three_instances() {
     let proposed = tokito::services::bom_sync::propose_from_schematic(&body);
     assert_eq!(proposed.len(), 1);
     assert!((proposed[0].quantity - 3.0).abs() < f64::EPSILON);
+    insta::assert_yaml_snapshot!("bom_proposed_from_three_R", proposed, {
+        "[].part_id" => "[uuid]",
+    });
 }
