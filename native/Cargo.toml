@@ -6,8 +6,8 @@ rust-version = "1.88"
 description = "Tokito desktop studio (egui)"
 license = "MIT"
 readme = "../README.md"
-repository = "https://github.com/Afnanksalal/tokito"
-homepage = "https://github.com/Afnanksalal/tokito"
+repository = "https://github.com/VtronTokito/tokito"
+homepage = "https://github.com/VtronTokito/tokito"
 default-run = "tokito-native"
 
 [lints.rust]

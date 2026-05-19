@@ -5,8 +5,8 @@ edition = "2021"
 description = "AI-assisted schematic studio (desktop)"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/Afnanksalal/tokito"
-homepage = "https://github.com/Afnanksalal/tokito"
+repository = "https://github.com/VtronTokito/tokito"
+homepage = "https://github.com/VtronTokito/tokito"
 rust-version = "1.88"
 
 [features]
