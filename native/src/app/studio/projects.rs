@@ -320,8 +320,8 @@ impl App {
         match self.projects_sort {
             ProjectsSort::NameAsc => rows.sort_by(|a, b| a.name.cmp(&b.name)),
             ProjectsSort::NameDesc => rows.sort_by(|a, b| b.name.cmp(&a.name)),
-            ProjectsSort::UpdatedAsc => rows.sort_by(|a, b| a.updated_at.cmp(&b.updated_at)),
-            ProjectsSort::UpdatedDesc => rows.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
+            ProjectsSort::UpdatedAsc => rows.sort_by_key(|a| a.updated_at),
+            ProjectsSort::UpdatedDesc => rows.sort_by_key(|r| std::cmp::Reverse(r.updated_at)),
         }
         rows
     }

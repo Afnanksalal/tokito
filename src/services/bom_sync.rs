@@ -28,7 +28,7 @@ pub fn propose_from_schematic(s: &ReplaceSchematic) -> Vec<ProposedBomLine> {
             notes: None,
         })
         .collect();
-    out.sort_by(|a, b| a.part_id.cmp(&b.part_id));
+    out.sort_by_key(|a| a.part_id);
     out
 }
 
