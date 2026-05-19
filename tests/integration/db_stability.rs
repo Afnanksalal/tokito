@@ -72,7 +72,10 @@ async fn port_conflict_does_not_wipe_cluster() -> anyhow::Result<()> {
     let _v4 = TcpListener::bind(("127.0.0.1", port))?;
     let _v6 = TcpListener::bind(("::1", port)).ok();
     let err = EmbeddedPostgres::start(&dir, port, 16).await;
-    assert!(err.is_err(), "pg-embed must fail when localhost:{port} is held");
+    assert!(
+        err.is_err(),
+        "pg-embed must fail when localhost:{port} is held"
+    );
     assert!(version_file.is_file());
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
