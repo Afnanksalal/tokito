@@ -31,7 +31,8 @@ Copy-Item -Recurse $AssetsSrc $AssetsDst
 Tokito — desktop schematic studio. Describe the board; AI drafts; you refine.
 
 1. Double-click Tokito.exe (keep the assets folder beside it)
-2. Open Settings and add your xAI and Firecrawl API keys
+2. Open Settings, pick an AI provider (OpenAI / Anthropic / Gemini / xAI / Kimi)
+   and paste its API key. Add a Firecrawl key for research.
 3. First launch may prepare the local database (internet needed once)
 
 Your designs: %LOCALAPPDATA%\tokito\

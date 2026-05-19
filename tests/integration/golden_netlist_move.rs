@@ -68,7 +68,7 @@ fn document_pin_nets_stable_when_symbol_moves_with_anchored_wires() {
     });
 
     let before = pin_net_set(&doc);
-    assert!(before.iter().any(|p| p.contains("SIGNAL")));
+    insta::assert_yaml_snapshot!("pin_nets_before_move", before);
 
     doc.symbols[0].position.x += 100.0;
     doc.symbols[0].position.y += 50.0;
@@ -80,5 +80,6 @@ fn document_pin_nets_stable_when_symbol_moves_with_anchored_wires() {
     }
 
     let after = pin_net_set(&doc);
-    assert_eq!(before, after);
+    assert_eq!(before, after, "pin nets must survive symbol translation");
+    insta::assert_yaml_snapshot!("pin_nets_after_move", after);
 }
