@@ -55,3 +55,6 @@ web/node_modules/
 # Misc
 *.orig
 *.rej
+
+# Local tooling (Claude Code per-project state)
+.claude/
