@@ -50,7 +50,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["serde", "v4", "v5"] }
 zip = "8.6"
-keyring = "3"
+keyring = "4"
 
 [dev-dependencies]
 http-body-util = "0.1"
