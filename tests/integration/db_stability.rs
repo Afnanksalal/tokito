@@ -66,9 +66,13 @@ async fn port_conflict_does_not_wipe_cluster() -> anyhow::Result<()> {
     let version_file: PathBuf = dir.join("PG_VERSION");
     assert!(version_file.is_file());
 
-    let _blocker = TcpListener::bind(("127.0.0.1", port))?;
+    // Postgres respects `listen_addresses = 'localhost'` which expands to BOTH
+    // 127.0.0.1 and [::1] on IPv6-enabled hosts. Block both, or pg-embed will
+    // happily bind the IPv6 half and the test premise (port conflict) breaks.
+    let _v4 = TcpListener::bind(("127.0.0.1", port))?;
+    let _v6 = TcpListener::bind(("::1", port)).ok();
     let err = EmbeddedPostgres::start(&dir, port, 16).await;
-    assert!(err.is_err());
+    assert!(err.is_err(), "pg-embed must fail when localhost:{port} is held");
     assert!(version_file.is_file());
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
