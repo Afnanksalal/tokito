@@ -47,6 +47,7 @@ Memory edits go in their own commit unless they're part of a code change that ma
 | [memory/env-vars.md](memory/env-vars.md) | Every `TOKITO_*` / runtime env var, what it overlays, and what is deliberately *not* an env var. |
 | [memory/http-api.md](memory/http-api.md) | The optional `/v1` Axum surface — what it is and is not. |
 | [memory/ui-design-language.md](memory/ui-design-language.md) | Native egui studio — stack, dock layout, design tokens, and egui 0.29 idioms & footguns. |
+| [memory/projects-and-exports.md](memory/projects-and-exports.md) | Project workspace folders, `project.toml`, exports, backups, and project zip import/export. |
 | [memory/testing-and-ci.md](memory/testing-and-ci.md) | How to run tests, the single integration harness, snapshot tests, and the CI pipeline. |
 | [memory/docs-reference.md](memory/docs-reference.md) | Where the canonical human docs and scripts live. |
 | [memory/env-linux-wslg.md](memory/env-linux-wslg.md) | Env-specific — running the desktop binary on WSL2/WSLg. Ignore unless that's your setup. |
