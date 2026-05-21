@@ -27,6 +27,9 @@ impl eframe::App for App {
 
         let tokens = self.ui_tokens;
 
+        // Studio route owns its own chrome (Save/ERC/Export/Settings/Panels).
+        // Projects route has an in-page hero, so no global topbar is rendered.
+        if matches!(self.route, Route::Studio { .. }) {
         egui::TopBottomPanel::top("topbar")
             .frame(egui::Frame::none().fill(tokens.bg_panel))
             .show(ctx, |ui| {
@@ -193,6 +196,7 @@ impl eframe::App for App {
                 });
                 ui.add_space(8.0);
             });
+        }
 
         match self.route {
             Route::Projects => {
@@ -200,7 +204,13 @@ impl eframe::App for App {
                     self.projects_need_refresh = false;
                     self.reload_projects();
                 }
+                // ⌘K / Ctrl+K opens the project/design quick switcher.
+                if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K)) {
+                    self.projects_palette_open = true;
+                    self.projects_palette_query.clear();
+                }
                 self.ui_projects(ctx);
+                self.show_projects_palette(ctx);
             }
             Route::Studio { design_id } => {
                 self.show_command_palette(ctx);

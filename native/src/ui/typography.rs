@@ -14,10 +14,11 @@ pub struct TypeRamp {
 
 impl Default for TypeRamp {
     fn default() -> Self {
+        // Matches named text styles registered in theme.rs (Heading / h2 / Body / Small / Monospace).
         Self {
-            title: 18.0,
-            section: 13.0,
-            body: 12.0,
+            title: 22.0,
+            section: 15.0,
+            body: 12.5,
             small: 11.0,
             mono: 12.0,
         }

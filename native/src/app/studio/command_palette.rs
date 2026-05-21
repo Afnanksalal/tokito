@@ -1,10 +1,143 @@
-//! Command palette (Ctrl+Shift+P).
+//! Command palette (Ctrl+Shift+P) and the projects-screen quick switcher (⌘K).
 
 use crate::app::studio_dock::{ensure_tab_visible, StudioTab};
 use crate::app::{App, Route};
 use crate::editor::CanvasTool;
+use uuid::Uuid;
+
+enum QuickPick {
+    Project(Uuid),
+    Design(Uuid),
+}
 
 impl App {
+    /// Quick switcher for the projects screen — fuzzy-jump to any project or
+    /// design. This is the scale answer: it stays usable no matter how many
+    /// projects exist, because the list is search-filtered, not browsed.
+    pub(crate) fn show_projects_palette(&mut self, ctx: &egui::Context) {
+        if !self.projects_palette_open {
+            return;
+        }
+        let tokens = self.ui_tokens;
+        let q = self.projects_palette_query.to_lowercase();
+        let mut pick: Option<QuickPick> = None;
+        let mut first: Option<QuickPick> = None;
+
+        egui::Window::new("quick_switch")
+            .title_bar(false)
+            .collapsible(false)
+            .resizable(false)
+            .default_width(480.0)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 96.0])
+            .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(12.0)))
+            .show(ctx, |ui| {
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.projects_palette_query)
+                        .hint_text("Jump to a project or design…")
+                        .desired_width(f32::INFINITY)
+                        .margin(egui::Margin::symmetric(10.0, 8.0)),
+                );
+                resp.request_focus();
+                ui.add_space(8.0);
+
+                let projects: Vec<_> = self
+                    .projects
+                    .iter()
+                    .filter(|p| q.is_empty() || p.name.to_lowercase().contains(&q))
+                    .cloned()
+                    .collect();
+                let designs: Vec<_> = self
+                    .designs
+                    .iter()
+                    .filter(|d| q.is_empty() || d.name.to_lowercase().contains(&q))
+                    .cloned()
+                    .collect();
+
+                // Shrinks vertically to its content — no empty void below a
+                // short result list. Only scrolls once results exceed 360 px.
+                egui::ScrollArea::vertical()
+                    .max_height(360.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        if !projects.is_empty() {
+                            ui.label(
+                                egui::RichText::new("PROJECTS")
+                                    .small()
+                                    .strong()
+                                    .color(tokens.text_muted),
+                            );
+                            ui.add_space(4.0);
+                            for p in &projects {
+                                if first.is_none() {
+                                    first = Some(QuickPick::Project(p.id));
+                                }
+                                let row = crate::ui::icons::icon_label(
+                                    crate::ui::icons::ph::FOLDER,
+                                    14.0,
+                                    &p.name,
+                                    12.5,
+                                    tokens.text_primary,
+                                );
+                                if crate::ui::widgets::list_row(ui, &tokens, row, false).clicked() {
+                                    pick = Some(QuickPick::Project(p.id));
+                                }
+                            }
+                            ui.add_space(10.0);
+                        }
+                        if !designs.is_empty() {
+                            ui.label(
+                                egui::RichText::new("DESIGNS")
+                                    .small()
+                                    .strong()
+                                    .color(tokens.text_muted),
+                            );
+                            ui.add_space(4.0);
+                            for d in &designs {
+                                if first.is_none() {
+                                    first = Some(QuickPick::Design(d.id));
+                                }
+                                let row = crate::ui::icons::icon_label(
+                                    crate::ui::icons::ph::LIGHTNING,
+                                    14.0,
+                                    &d.name,
+                                    12.5,
+                                    tokens.text_primary,
+                                );
+                                if crate::ui::widgets::list_row(ui, &tokens, row, false).clicked() {
+                                    pick = Some(QuickPick::Design(d.id));
+                                }
+                            }
+                        }
+                        if projects.is_empty() && designs.is_empty() {
+                            ui.add_space(8.0);
+                            ui.label(egui::RichText::new("No matches").color(tokens.text_muted));
+                            ui.add_space(8.0);
+                        }
+                    });
+            });
+
+        // Enter picks the first result; Esc dismisses.
+        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) && pick.is_none() {
+            pick = first;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.projects_palette_open = false;
+            self.projects_palette_query.clear();
+        }
+        if let Some(pick) = pick {
+            match pick {
+                QuickPick::Project(id) => {
+                    self.active_project_id = Some(id);
+                    self.reload_projects();
+                }
+                QuickPick::Design(id) => self.open_design(id),
+            }
+            self.projects_palette_open = false;
+            self.projects_palette_query.clear();
+            ctx.request_repaint();
+        }
+    }
+
     pub(crate) fn show_command_palette(&mut self, ctx: &egui::Context) {
         if !self.command_palette_open {
             return;

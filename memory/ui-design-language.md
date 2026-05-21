@@ -1,11 +1,51 @@
 # UI design language
 
+## `tokito_ui` — the shared component library
+
+The projects/landing experience is built on **`tokito_ui`**, a separate egui
+component library — repo **github.com/VtronTokito/ui**, consumed by `native/`
+as a dependency (path dep on the landing branch; git dep on `master`).
+
+> **STRICT — UI components live in `tokito_ui`, never hand-rolled in this app.**
+> If you need a new UI element (a button variant, an input, a dialog, a list
+> row, a chip, …) or a behaviour/look change to an existing one:
+> 1. **First** add or change it in the **`tokito_ui`** repo — add a new
+>    `pub fn` in `components.rs`, **or add/extend a parameter** on an existing
+>    component. Prefer extending an existing component's parameters over
+>    creating a near-duplicate.
+> 2. Push `tokito_ui`, then `cargo update -p tokito_ui` here, then use it.
+>
+> Do **not** build one-off widgets in `native/src/` with raw `egui` painter /
+> `Frame` / `Button` calls. The app only *composes* domain widgets (a project
+> card) out of `tokito_ui` primitives — it never defines new primitives. A
+> raw-egui widget in app code is a review-blocking mistake; move it to
+> `tokito_ui`. (The pre-`tokito_ui` studio code in `crate::ui::*` is legacy
+> being migrated — don't add to it.)
+
+- **What it owns:** the `Tokens` palette (dark/light), theme application,
+  Phosphor icon helpers, and composable primitives — `card`, `new_tile`,
+  `icon_button`, `text_button`, `link`, `list_row`, `text_input`,
+  `search_field`, `toggle`, `modal`, `page_header`, `section_header`.
+- **How to use it:** `use tokito_ui::components as c;` then `c::card(ui, &t, …)`
+  etc., with a `tokito_ui::Tokens` value (`Tokens::from_name(&theme)`).
+- **Where it's used:** `native/src/app/studio/projects.rs` (projects home +
+  per-project designs view) is fully ported to it. The studio/editor still
+  uses the app's older `crate::ui::*` (`UiTokens`, `widgets`, `layout`) — a
+  gradual migration; new chrome should prefer `tokito_ui`.
+- **Rules** (see the repo's `AGENTS.md`): primitives not finished widgets;
+  every component is a free fn taking `&Tokens`; widgets with internal state
+  take an explicit `id_source`; pin egui 0.29 + egui-phosphor 0.7.x together.
+- **Two token types coexist:** `tokito_ui::Tokens` (landing) and the app's
+  `crate::ui::tokens::UiTokens` (studio, with schematic-specific colours).
+  Don't conflate them.
+
 **Stack — pure-Rust native UI, no web layer.** Critical to know before suggesting changes:
 
 - **`eframe` 0.29** = app shell (window, event loop, GL context).
 - **`egui` 0.29** = immediate-mode GUI — every frame is redrawn; there is **no retained widget tree, no virtual DOM, no CSS, no JSX**. Idioms from React/Vue/Tauri **do not apply**.
 - **`egui_dock` 0.14** = the studio panel docking (Build/BOM/Inspector/Research tabs).
 - **`egui_extras` 0.29** = tables (BOM, parts lists in `native/src/ui/table.rs`).
+- **`egui-phosphor` 0.7** = Phosphor icon font (Regular variant). Stay on **0.7.x** — versions ≥ 0.8 target egui ≥ 0.30. See the icon-rendering footgun below.
 - **`glam` 0.29** = canvas/wire geometry math. **`rfd` 0.15** = native file dialogs (the reason `libgtk-3-dev` is a Linux build dep — **not** because the UI uses GTK widgets). **`open` 5** = "reveal in folder". **`dark-light` 2** = OS theme detection.
 - Rendering backend: **glow** (OpenGL) via `egui_glow 0.29` + winit + glutin. **No wgpu in the workspace.**
 - The schematic canvas (`native/src/canvas.rs`, `native/src/editor/render.rs`, `native/src/symbols_draw.rs`) draws using egui's `Painter` primitives — lines, rects, circles, text — not an external 2D lib.
@@ -34,6 +74,8 @@ Researched 2026-05-19 (sources: egui 0.29.1 docs.rs `Ui` / `Layout`, github.com/
 1. **`ui.set_width(w)` / `ui.set_max_width(w)` do NOT constrain children.** They only set the parent's `max_rect`; a widget that reports a larger desired size still gets it and the parent silently expands. From the `Ui` docs: *"If a new widget doesn't fit within the `max_rect` then the Ui will make room for it by expanding both `min_rect` and `max_rect`."* Emil's own note in discussion #469: these helpers are "a bit under-developed." Real-world manifestation: `native/src/app/studio/projects.rs` allocates a 260 px right column with `set_width`/`set_max_width` but `secondary_button("Export project zip")` and friends overflow past the window edge.
 2. **`horizontal_wrapped` is for inline chips/breadcrumbs, not stacks of full-width buttons.** Wrapping picks one-per-row when needed, but each child still claims its desired width — so a column-of-buttons inside `horizontal_wrapped` still bleeds. See issue #1996.
 3. **Custom card helpers** (e.g. `crate::ui::layout::content_card`) should wrap `egui::Frame::group(ui.style())` rather than reinvent stroke/fill — `Frame::group` picks up the active visuals so light/dark themes Just Work.
+4. **Hand-computed card rects drift.** `allocate_exact_size` + `painter_at` + `child_ui(manual_rect)` to lay out a card's contents reliably produces visible offsets. Use `egui::Frame` (fill + rounding + stroke + `inner_margin`) and lay contents out with normal top-down flow inside it; never arithmetic on `Rect::from_min_size` for sub-regions of a widget.
+5. **Phosphor icons must render via a dedicated font family.** Inter Var has glyphs at some Private-Use-Area codepoints that collide with Phosphor's. If Phosphor is only a *fallback* in the Proportional family, Inter intercepts those codepoints and paints a stray glyph (folder→"m", caret→"▶", dots→"p"). Putting Phosphor *first* breaks all Latin text (its font covers Latin with blank glyphs). **Fix:** `theme.rs` registers a separate `FontFamily::Name("phosphor")` family containing only the icon font; `native/src/ui/icons.rs` renders icons through it (`icons::icon(...)`, `icons::icon_label(...)`, `icons::icon_font(...)`). Never put a Phosphor glyph in a string that also contains Latin rendered by the default family.
 
 **Idioms to reach for instead:**
 
