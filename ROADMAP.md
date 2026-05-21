@@ -49,4 +49,4 @@ Where the product is headed—not a fixed schedule. Priorities change as we ship
 
 ---
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) to help shape direction.
+Day-to-day status of these horizon items is tracked on the [project board](https://github.com/orgs/VtronTokito/projects/1). See [CONTRIBUTING.md](CONTRIBUTING.md) to help shape direction.
