@@ -126,7 +126,9 @@ fn apply_tokens(ctx: &egui::Context, t: &UiTokens, theme: &str) {
     ctx.set_visuals(visuals);
     let mut style = (*ctx.style()).clone();
     // Named scale; call sites prefer RichText::text_style(TextStyle::Name(...)) over .size(N).
-    style.text_styles.insert(TextStyle::Heading, FontId::proportional(22.0));
+    style
+        .text_styles
+        .insert(TextStyle::Heading, FontId::proportional(22.0));
     style
         .text_styles
         .insert(TextStyle::Name(Arc::from("h2")), FontId::proportional(15.0));

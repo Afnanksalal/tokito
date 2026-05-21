@@ -5328,7 +5328,7 @@ dependencies = [
 [[package]]
 name = "tokito_ui"
 version = "0.1.0"
-source = "git+https://github.com/VtronTokito/ui#172dce0ac4932433b5aed26c06a95bcb26ba7bd0"
+source = "git+https://github.com/VtronTokito/ui#c87f54320069679d808759727d28c3695b8b9bcf"
 dependencies = [
  "egui",
  "egui-phosphor",

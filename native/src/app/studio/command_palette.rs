@@ -29,10 +29,7 @@ impl App {
             .resizable(false)
             .default_width(480.0)
             .anchor(egui::Align2::CENTER_TOP, [0.0, 96.0])
-            .frame(
-                egui::Frame::window(&ctx.style())
-                    .inner_margin(egui::Margin::same(12.0)),
-            )
+            .frame(egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::same(12.0)))
             .show(ctx, |ui| {
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut self.projects_palette_query)
@@ -81,9 +78,7 @@ impl App {
                                     12.5,
                                     tokens.text_primary,
                                 );
-                                if crate::ui::widgets::list_row(ui, &tokens, row, false)
-                                    .clicked()
-                                {
+                                if crate::ui::widgets::list_row(ui, &tokens, row, false).clicked() {
                                     pick = Some(QuickPick::Project(p.id));
                                 }
                             }
@@ -108,19 +103,14 @@ impl App {
                                     12.5,
                                     tokens.text_primary,
                                 );
-                                if crate::ui::widgets::list_row(ui, &tokens, row, false)
-                                    .clicked()
-                                {
+                                if crate::ui::widgets::list_row(ui, &tokens, row, false).clicked() {
                                     pick = Some(QuickPick::Design(d.id));
                                 }
                             }
                         }
                         if projects.is_empty() && designs.is_empty() {
                             ui.add_space(8.0);
-                            ui.label(
-                                egui::RichText::new("No matches")
-                                    .color(tokens.text_muted),
-                            );
+                            ui.label(egui::RichText::new("No matches").color(tokens.text_muted));
                             ui.add_space(8.0);
                         }
                     });

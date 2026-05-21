@@ -32,10 +32,7 @@ pub fn list_row(
         ui.painter().rect_filled(rect, tokens.radius_sm, bg);
     }
     let galley = ui.fonts(|f| f.layout_job(job));
-    let pos = egui::pos2(
-        rect.left() + 10.0,
-        rect.center().y - galley.size().y / 2.0,
-    );
+    let pos = egui::pos2(rect.left() + 10.0, rect.center().y - galley.size().y / 2.0);
     ui.painter().galley(pos, galley, tokens.text_primary);
     resp
 }

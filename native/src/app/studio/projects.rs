@@ -43,8 +43,17 @@ impl App {
                         } else {
                             icons::ph::MOON
                         };
-                        if c::icon_button(ui, &t, glyph, 32.0).clicked() {
+                        if c::icon_button(ui, &t, glyph, 32.0)
+                            .on_hover_text("Toggle theme")
+                            .clicked()
+                        {
                             self.toggle_theme(ctx);
+                        }
+                        if c::icon_button(ui, &t, icons::ph::UPLOAD_SIMPLE, 32.0)
+                            .on_hover_text("Import project from .zip")
+                            .clicked()
+                        {
+                            self.import_project_zip();
                         }
                     });
                 });
@@ -101,6 +110,24 @@ impl App {
                 self.new_design_form_open = false;
             }
         }
+        if let Some(pid) = self.renaming_project_id {
+            let mut open = true;
+            c::modal(ctx, &t, &mut open, "Rename project", 380.0, |ui| {
+                self.rename_modal_body(ui, &t, RenameTarget::Project(pid));
+            });
+            if !open {
+                self.renaming_project_id = None;
+            }
+        }
+        if let Some(did) = self.renaming_design_id {
+            let mut open = true;
+            c::modal(ctx, &t, &mut open, "Rename design", 380.0, |ui| {
+                self.rename_modal_body(ui, &t, RenameTarget::Design(did));
+            });
+            if !open {
+                self.renaming_design_id = None;
+            }
+        }
         // The ⌘K quick switcher is driven from `impl_eframe` (key handling +
         // `show_projects_palette`), so it is not rendered again here.
     }
@@ -121,7 +148,7 @@ impl App {
         // 3-up grid: a new-project tile, then project cards.
         let card_w = ((col_w - GRID_GAP * 2.0) / 3.0).floor();
         let projects = self.projects.clone();
-        let mut enter: Option<uuid::Uuid> = None;
+        let mut act: Option<(uuid::Uuid, ProjectAction)> = None;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(GRID_GAP, GRID_GAP);
 
@@ -131,18 +158,33 @@ impl App {
             }
 
             for p in &projects {
-                if project_card(ui, t, &p.name, &p.updated_at, card_w).clicked() {
-                    enter = Some(p.id);
+                let a = project_card(ui, t, &p.name, &p.updated_at, p.id, card_w);
+                if !matches!(a, ProjectAction::None) {
+                    act = Some((p.id, a));
                 }
             }
         });
 
-        if let Some(pid) = enter {
-            self.active_project_id = Some(pid);
-            self.projects_view = ProjectsView::Designs;
-            self.projects_search.clear();
-            self.reload_projects();
-            ui.ctx().request_repaint();
+        if let Some((pid, action)) = act {
+            match action {
+                ProjectAction::Enter => {
+                    self.active_project_id = Some(pid);
+                    self.projects_view = ProjectsView::Designs;
+                    self.projects_search.clear();
+                    self.reload_projects();
+                    ui.ctx().request_repaint();
+                }
+                ProjectAction::Rename => {
+                    self.project_rename_name = projects
+                        .iter()
+                        .find(|p| p.id == pid)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_default();
+                    self.renaming_project_id = Some(pid);
+                }
+                ProjectAction::Export => self.export_active_project_zip(pid),
+                ProjectAction::None => {}
+            }
         }
     }
 
@@ -180,11 +222,7 @@ impl App {
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "Project".to_string());
         let count = self.designs.len();
-        let sub = format!(
-            "{} design{}",
-            count,
-            if count == 1 { "" } else { "s" }
-        );
+        let sub = format!("{} design{}", count, if count == 1 { "" } else { "s" });
         c::page_header(ui, t, &project_name, &sub);
         ui.add_space(26.0);
 
@@ -212,8 +250,9 @@ impl App {
         ui.add_space(16.0);
 
         let rows = self.filtered_project_designs();
+        let pinned = self.projects_pinned.clone();
         let card_w = ((col_w - GRID_GAP * 2.0) / 3.0).floor();
-        let mut open: Option<uuid::Uuid> = None;
+        let mut act: Option<(uuid::Uuid, DesignAction)> = None;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(GRID_GAP, GRID_GAP);
 
@@ -233,8 +272,9 @@ impl App {
             }
 
             for d in &rows {
-                if design_card(ui, t, d, card_w).clicked() {
-                    open = Some(d.id);
+                let a = design_card(ui, t, d, card_w, pinned.contains(&d.id));
+                if !matches!(a, DesignAction::None) {
+                    act = Some((d.id, a));
                 }
             }
         });
@@ -248,8 +288,24 @@ impl App {
             );
         }
 
-        if let Some(id) = open {
-            self.open_design(id);
+        if let Some((did, action)) = act {
+            match action {
+                DesignAction::Open => self.open_design(did),
+                DesignAction::Rename => {
+                    self.design_rename_name = rows
+                        .iter()
+                        .find(|d| d.id == did)
+                        .map(|d| d.name.clone())
+                        .unwrap_or_default();
+                    self.renaming_design_id = Some(did);
+                }
+                DesignAction::TogglePin => {
+                    if !self.projects_pinned.remove(&did) {
+                        self.projects_pinned.insert(did);
+                    }
+                }
+                DesignAction::None => {}
+            }
         }
     }
 
@@ -269,7 +325,12 @@ impl App {
             w,
         );
         ui.add_space(14.0);
-        c::toggle(ui, t, &mut self.new_project_embedded_db, "Isolated database");
+        c::toggle(
+            ui,
+            t,
+            &mut self.new_project_embedded_db,
+            "Isolated database",
+        );
         ui.add_space(4.0);
         ui.label(
             egui::RichText::new("Stores this project's data in its own local database.")
@@ -318,6 +379,49 @@ impl App {
             ui.add_space(8.0);
             if c::text_button(ui, t, c::ButtonKind::Secondary, "Cancel", 34.0).clicked() {
                 self.new_design_form_open = false;
+            }
+        });
+    }
+
+    fn rename_modal_body(&mut self, ui: &mut egui::Ui, t: &Tokens, target: RenameTarget) {
+        let w = ui.available_width();
+        field_label(ui, t, "Name");
+        match target {
+            RenameTarget::Project(_) => {
+                c::text_input(
+                    ui,
+                    t,
+                    "project_rename",
+                    &mut self.project_rename_name,
+                    "Project name",
+                    w,
+                );
+            }
+            RenameTarget::Design(_) => {
+                c::text_input(
+                    ui,
+                    t,
+                    "design_rename",
+                    &mut self.design_rename_name,
+                    "Design name",
+                    w,
+                );
+            }
+        }
+        ui.add_space(18.0);
+        ui.horizontal(|ui| {
+            if c::text_button(ui, t, c::ButtonKind::Primary, "Save", 34.0).clicked() {
+                match target {
+                    RenameTarget::Project(pid) => self.rename_active_project(pid),
+                    RenameTarget::Design(did) => self.rename_design_from_projects(did),
+                }
+            }
+            ui.add_space(8.0);
+            if c::text_button(ui, t, c::ButtonKind::Secondary, "Cancel", 34.0).clicked() {
+                match target {
+                    RenameTarget::Project(_) => self.renaming_project_id = None,
+                    RenameTarget::Design(_) => self.renaming_design_id = None,
+                }
             }
         });
     }
@@ -450,7 +554,13 @@ impl App {
             ProjectsSort::UpdatedAsc => rows.sort_by_key(|a| a.updated_at),
             ProjectsSort::UpdatedDesc => rows.sort_by_key(|r| std::cmp::Reverse(r.updated_at)),
         }
-        rows
+        // Pinned designs float to the top, keeping the chosen sort within each
+        // group (`partition` preserves order).
+        let (mut pinned, mut rest): (Vec<_>, Vec<_>) = rows
+            .into_iter()
+            .partition(|d| self.projects_pinned.contains(&d.id));
+        pinned.append(&mut rest);
+        pinned
     }
 
     fn rename_active_project(&mut self, project_id: uuid::Uuid) {
@@ -518,23 +628,27 @@ impl App {
         }
     }
 
-    #[allow(dead_code)]
     fn export_active_project_zip(&mut self, pid: uuid::Uuid) {
         if let Some(path) = rfd::FileDialog::new()
             .set_file_name("project.zip")
             .save_file()
         {
+            // Connect to the target project's database so the export reads the
+            // right cluster (the card may not be the active project).
+            self.connect_project_db_for_project(pid);
             let uid = self.user_id;
             let db_url = self.db_url.clone();
             let pg_ver = self.settings_file.database.pg_embed_version;
-            let res = self.rt.block_on(tokito::services::project_archive::export_project_zip(
-                &self.pool,
-                pid,
-                uid,
-                &path,
-                Some(&db_url),
-                pg_ver,
-            ));
+            let res = self
+                .rt
+                .block_on(tokito::services::project_archive::export_project_zip(
+                    &self.pool,
+                    pid,
+                    uid,
+                    &path,
+                    Some(&db_url),
+                    pg_ver,
+                ));
             match res {
                 Ok(()) => self.toast_ok("Project exported"),
                 Err(e) => self.set_err(e.to_string()),
@@ -542,18 +656,19 @@ impl App {
         }
     }
 
-    #[allow(dead_code)]
     fn import_project_zip(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Zip", &["zip"])
             .pick_file()
         {
             let uid = self.user_id;
-            let res = self.rt.block_on(tokito::services::project_archive::import_project_zip(
-                &self.global_pool,
-                &path,
-                uid,
-            ));
+            let res = self
+                .rt
+                .block_on(tokito::services::project_archive::import_project_zip(
+                    &self.global_pool,
+                    &path,
+                    uid,
+                ));
             match res {
                 Ok(id) => {
                     self.active_project_id = Some(id);
@@ -627,47 +742,126 @@ fn short_date(ts: &impl ToString) -> String {
     s.get(..10).map(String::from).unwrap_or(s)
 }
 
-/// A project card: folder chip, name, updated date.
+/// Which entity a rename modal is editing.
+#[derive(Clone, Copy)]
+enum RenameTarget {
+    Project(uuid::Uuid),
+    Design(uuid::Uuid),
+}
+
+/// What a project card click resolved to.
+enum ProjectAction {
+    None,
+    /// Body clicked — open this project's designs.
+    Enter,
+    /// Kebab → Rename.
+    Rename,
+    /// Kebab → Export .zip.
+    Export,
+}
+
+/// What a design card click resolved to.
+enum DesignAction {
+    None,
+    /// Body clicked — open the design in the studio.
+    Open,
+    /// Kebab → Rename.
+    Rename,
+    /// Kebab → Pin / Unpin.
+    TogglePin,
+}
+
+/// A project card: folder chip + kebab (Rename / Export), name, updated date.
 fn project_card(
     ui: &mut egui::Ui,
     t: &Tokens,
     name: &str,
     updated_at: &impl ToString,
+    project_id: uuid::Uuid,
     width: f32,
-) -> egui::Response {
-    c::card(ui, t, egui::vec2(width, CARD_H), |ui| {
+) -> ProjectAction {
+    let mut action = ProjectAction::None;
+    let resp = c::card(ui, t, egui::vec2(width, CARD_H), |ui| {
         ui.horizontal(|ui| {
             icon_chip(ui, t, icons::ph::FOLDER);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                c::menu_button(
+                    ui,
+                    t,
+                    ("project_kebab", project_id),
+                    icons::ph::DOTS_THREE_VERTICAL,
+                    26.0,
+                    |ui| {
+                        if c::menu_item(ui, t, icons::ph::PENCIL_SIMPLE, "Rename") {
+                            action = ProjectAction::Rename;
+                        }
+                        if c::menu_item(ui, t, icons::ph::DOWNLOAD_SIMPLE, "Export .zip") {
+                            action = ProjectAction::Export;
+                        }
+                    },
+                );
+            });
         });
         ui.add_space(12.0);
         ui.label(
-            egui::RichText::new(crate::util::truncate_ui_chars(name, 28))
+            egui::RichText::new(crate::util::truncate_ui_chars(name, 26))
                 .size(14.5)
                 .strong()
                 .color(t.text),
         );
         ui.add_space((ui.available_height() - 16.0).max(4.0));
-        ui.label(
-            icons::icon_text(
-                icons::ph::CLOCK,
-                13.0,
-                &short_date(updated_at),
-                12.0,
-                t.text_3,
-            ),
-        );
-    })
+        ui.label(icons::icon_text(
+            icons::ph::CLOCK,
+            13.0,
+            &short_date(updated_at),
+            12.0,
+            t.text_3,
+        ));
+    });
+    if resp.clicked() && matches!(action, ProjectAction::None) {
+        action = ProjectAction::Enter;
+    }
+    action
 }
 
-/// A design card: schematic chip, name, updated date.
-fn design_card(ui: &mut egui::Ui, t: &Tokens, d: &Design, width: f32) -> egui::Response {
-    c::card(ui, t, egui::vec2(width, CARD_H), |ui| {
+/// A design card: schematic chip + kebab (Rename / Pin), name, updated date.
+fn design_card(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    d: &Design,
+    width: f32,
+    is_pinned: bool,
+) -> DesignAction {
+    let mut action = DesignAction::None;
+    let resp = c::card(ui, t, egui::vec2(width, CARD_H), |ui| {
         ui.horizontal(|ui| {
             icon_chip(ui, t, icons::ph::TREE_STRUCTURE);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                c::menu_button(
+                    ui,
+                    t,
+                    ("design_kebab", d.id),
+                    icons::ph::DOTS_THREE_VERTICAL,
+                    26.0,
+                    |ui| {
+                        if c::menu_item(ui, t, icons::ph::PENCIL_SIMPLE, "Rename") {
+                            action = DesignAction::Rename;
+                        }
+                        let pin_label = if is_pinned { "Unpin" } else { "Pin" };
+                        if c::menu_item(ui, t, icons::ph::PUSH_PIN, pin_label) {
+                            action = DesignAction::TogglePin;
+                        }
+                    },
+                );
+                if is_pinned {
+                    ui.add_space(3.0);
+                    ui.label(icons::icon(icons::ph::PUSH_PIN, 13.0, t.accent));
+                }
+            });
         });
         ui.add_space(12.0);
         ui.label(
-            egui::RichText::new(crate::util::truncate_ui_chars(&d.name, 28))
+            egui::RichText::new(crate::util::truncate_ui_chars(&d.name, 26))
                 .size(14.5)
                 .strong()
                 .color(t.text),
@@ -680,5 +874,9 @@ fn design_card(ui: &mut egui::Ui, t: &Tokens, d: &Design, width: f32) -> egui::R
             12.0,
             t.text_3,
         ));
-    })
+    });
+    if resp.clicked() && matches!(action, DesignAction::None) {
+        action = DesignAction::Open;
+    }
+    action
 }
