@@ -6,6 +6,22 @@ The projects/landing experience is built on **`tokito_ui`**, a separate egui
 component library — repo **github.com/VtronTokito/ui**, consumed by `native/`
 as a dependency (path dep on the landing branch; git dep on `master`).
 
+> **STRICT — UI components live in `tokito_ui`, never hand-rolled in this app.**
+> If you need a new UI element (a button variant, an input, a dialog, a list
+> row, a chip, …) or a behaviour/look change to an existing one:
+> 1. **First** add or change it in the **`tokito_ui`** repo — add a new
+>    `pub fn` in `components.rs`, **or add/extend a parameter** on an existing
+>    component. Prefer extending an existing component's parameters over
+>    creating a near-duplicate.
+> 2. Push `tokito_ui`, then `cargo update -p tokito_ui` here, then use it.
+>
+> Do **not** build one-off widgets in `native/src/` with raw `egui` painter /
+> `Frame` / `Button` calls. The app only *composes* domain widgets (a project
+> card) out of `tokito_ui` primitives — it never defines new primitives. A
+> raw-egui widget in app code is a review-blocking mistake; move it to
+> `tokito_ui`. (The pre-`tokito_ui` studio code in `crate::ui::*` is legacy
+> being migrated — don't add to it.)
+
 - **What it owns:** the `Tokens` palette (dark/light), theme application,
   Phosphor icon helpers, and composable primitives — `card`, `new_tile`,
   `icon_button`, `text_button`, `link`, `list_row`, `text_input`,

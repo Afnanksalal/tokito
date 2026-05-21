@@ -12,7 +12,7 @@ use tokito_ui::{icons, Tokens};
 /// Max width of the centred content column.
 const COLUMN_MAX: f32 = 1040.0;
 /// Project / design card footprint.
-const CARD_H: f32 = 118.0;
+const CARD_H: f32 = 130.0;
 /// Gap between grid cards.
 const GRID_GAP: f32 = 16.0;
 
@@ -828,7 +828,7 @@ fn project_card(
                 .strong()
                 .color(t.text),
         );
-        ui.add_space((ui.available_height() - 16.0).max(4.0));
+        ui.add_space(8.0);
         ui.label(icons::icon_text(
             icons::ph::CLOCK,
             13.0,
@@ -885,7 +885,7 @@ fn design_card(
                 .strong()
                 .color(t.text),
         );
-        ui.add_space((ui.available_height() - 16.0).max(4.0));
+        ui.add_space(8.0);
         ui.label(icons::icon_text(
             icons::ph::CLOCK,
             13.0,
