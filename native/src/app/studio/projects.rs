@@ -222,8 +222,18 @@ impl App {
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "Project".to_string());
         let count = self.designs.len();
-        let sub = format!("{} design{}", count, if count == 1 { "" } else { "s" });
-        c::page_header(ui, t, &project_name, &sub);
+        let badge_text = format!("{} design{}", count, if count == 1 { "" } else { "s" });
+        // Title + count badge on one line.
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(&project_name)
+                    .text_style(egui::TextStyle::Heading)
+                    .strong()
+                    .color(t.text),
+            );
+            ui.add_space(10.0);
+            c::badge(ui, t, &badge_text);
+        });
         ui.add_space(26.0);
 
         // section header row: "Designs" + search + sort
