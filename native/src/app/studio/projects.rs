@@ -801,6 +801,8 @@ fn project_card(
 ) -> ProjectAction {
     let mut action = ProjectAction::None;
     let resp = c::card(ui, t, egui::vec2(width, CARD_H), |ui| {
+        // Only explicit add_space controls vertical rhythm inside the card.
+        ui.spacing_mut().item_spacing.y = 0.0;
         ui.horizontal(|ui| {
             icon_chip(ui, t, icons::ph::FOLDER);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -853,6 +855,8 @@ fn design_card(
 ) -> DesignAction {
     let mut action = DesignAction::None;
     let resp = c::card(ui, t, egui::vec2(width, CARD_H), |ui| {
+        // Only explicit add_space controls vertical rhythm inside the card.
+        ui.spacing_mut().item_spacing.y = 0.0;
         ui.horizontal(|ui| {
             icon_chip(ui, t, icons::ph::TREE_STRUCTURE);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
