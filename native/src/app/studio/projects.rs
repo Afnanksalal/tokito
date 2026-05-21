@@ -12,7 +12,7 @@ use tokito_ui::{icons, Tokens};
 /// Max width of the centred content column.
 const COLUMN_MAX: f32 = 1040.0;
 /// Project / design card footprint.
-const CARD_H: f32 = 138.0;
+const CARD_H: f32 = 118.0;
 /// Gap between grid cards.
 const GRID_GAP: f32 = 16.0;
 
@@ -48,12 +48,6 @@ impl App {
                             .clicked()
                         {
                             self.toggle_theme(ctx);
-                        }
-                        if c::icon_button(ui, &t, icons::ph::UPLOAD_SIMPLE, 32.0)
-                            .on_hover_text("Import project from .zip")
-                            .clicked()
-                        {
-                            self.import_project_zip();
                         }
                     });
                 });
@@ -356,6 +350,21 @@ impl App {
             ui.add_space(8.0);
             if c::text_button(ui, t, c::ButtonKind::Secondary, "Cancel", 34.0).clicked() {
                 self.new_project_form_open = false;
+            }
+        });
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Already have a project archive?")
+                    .size(12.0)
+                    .color(t.text_3),
+            );
+            ui.add_space(6.0);
+            if c::text_button(ui, t, c::ButtonKind::Secondary, "Import .zip", 30.0).clicked() {
+                self.new_project_form_open = false;
+                self.import_project_zip();
             }
         });
     }
