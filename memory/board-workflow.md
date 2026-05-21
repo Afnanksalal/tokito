@@ -1,6 +1,6 @@
 # Board workflow (GitHub Projects + `scripts/board.sh`)
 
-The project board is the live tracker for everything in motion — roadmap items, features, bugs, tasks. `ROADMAP.md` is the human-facing horizon; the board is "what are we doing and where does it stand."
+The project board is the live tracker for everything in motion — roadmap items, features, bugs, tasks. **The board is the roadmap** — there is no separate roadmap file; the `roadmap`-labelled cards are the product horizon.
 
 - **Board:** <https://github.com/orgs/VtronTokito/projects/1> (org `VtronTokito`, project number `1`)
 - **Every card is a GitHub issue** in `VtronTokito/tokito`. Nothing is a draft issue — real issues carry labels, comments, and PR links.
@@ -14,7 +14,7 @@ The project board is the live tracker for everything in motion — roadmap items
 |---|---|---|
 | **Status** | Aim · Next up · In progress · In review · Done | Where the work stands. The board columns. |
 | **Owner** | Afnan · Joel · Both · Unassigned | Who is driving the card (distinct from GitHub assignee). |
-| **Area** | Schematic & Library · PCB Layout · AI & Automation · Production · Platform | Mirrors the `ROADMAP.md` horizon sections. |
+| **Area** | Schematic & Library · PCB Layout · AI & Automation · Production · Platform | The product's major work areas. |
 | **Priority** | P0 · P1 · P2 | P0 = drop-everything. |
 
 **Type is a label, not a field** — `bug`, `feature`, `epic`, `roadmap`, `task`, `chore`. One issue, classified by label, keeps the Issues tab and the board in agreement. `epic` is for a large item that spawns child issues.
@@ -51,7 +51,7 @@ Agents must keep cards in step with reality — see the **The board** section of
 The CLI cannot create board views or workflows — do these once in the browser:
 
 1. **Board view** — open the project → add a view → layout **Board**, group by **Status**. This is the kanban.
-2. **Roadmap/Table views** — optionally add a view grouped by **Area** for a roadmap-style read, and a **Table** view for triage.
+2. **Roadmap view** — add a view filtered to `label:roadmap,epic`, grouped by **Area**. This is the roadmap read, kept free of bugs and chores. Optionally add a **Table** view (no filter) for triage.
 3. **Workflows** (project → ⋯ → Workflows) — enable so the board self-maintains:
    - *Item added to project* → set **Status** = `Aim`
    - *Item closed* → set **Status** = `Done`

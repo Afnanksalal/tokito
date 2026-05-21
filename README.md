@@ -61,7 +61,7 @@ Bundled libraries: [`assets/base-symbols/`](assets/base-symbols/) (see [LICENSE]
 
 ## Docs & contributing
 
-- [ROADMAP.md](ROADMAP.md): Vision and horizon
+- [Project board](https://github.com/orgs/VtronTokito/projects/1): Roadmap, status, and active work
 - [CONTRIBUTING.md](CONTRIBUTING.md): Build, test, PR guidelines
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): System overview
 - [docs/SETTINGS.md](docs/SETTINGS.md): `settings.toml` reference
