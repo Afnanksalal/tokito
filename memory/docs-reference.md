@@ -3,7 +3,7 @@
 Keep these updated per CONTRIBUTING when behavior changes:
 
 - `README.md` — install/run, settings overview, shortcuts.
-- `ROADMAP.md` — vision, shipped today vs. horizon (PCB layout, fab DRC, agents).
+- Roadmap & live status — the [project board](https://github.com/orgs/VtronTokito/projects/1), not a file. `roadmap`-labelled cards are the horizon; see `memory/board-workflow.md`.
 - `CONTRIBUTING.md` — workspace shape, pre-PR commands, doc-update obligations, MIT licensing.
 - `SECURITY.md` — vuln disclosure.
 - `docs/ARCHITECTURE.md` — system overview, mermaid diagrams, native module map.
