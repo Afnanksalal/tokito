@@ -57,18 +57,15 @@ pub fn empty_state(ui: &mut Ui, tokens: &UiTokens, message: &str) {
 }
 
 pub fn content_card(ui: &mut Ui, tokens: &UiTokens, add_contents: impl FnOnce(&mut Ui)) {
-    let outer_width = ui.available_width();
+    // Frame's inner_margin already constrains the inner Ui to (outer_w - margin*2);
+    // calling set_width/set_max_width here does nothing useful (egui idiom: those helpers
+    // only set max_rect, they do not constrain children). Let Frame do its job.
     egui::Frame::none()
         .fill(tokens.bg_elevated)
         .rounding(tokens.radius_md)
-        .inner_margin(Margin::same(14.0))
+        .inner_margin(Margin::same(16.0))
         .stroke(tokens.stroke_subtle)
         .show(ui, |ui| {
-            if outer_width.is_finite() && outer_width > 28.0 {
-                let inner_width = (outer_width - 28.0).max(0.0);
-                ui.set_width(inner_width);
-                ui.set_max_width(inner_width);
-            }
             add_contents(ui);
         });
 }
@@ -128,22 +125,15 @@ pub fn filter_chip(ui: &mut Ui, tokens: &UiTokens, label: &str, selected: bool) 
 
 pub fn search_field(ui: &mut Ui, query: &mut String, hint: &str) -> bool {
     let mut submit = false;
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("Search")
-                .size(11.0)
-                .color(ui.visuals().weak_text_color()),
-        );
-        let r = ui.add(
-            egui::TextEdit::singleline(query)
-                .hint_text(hint)
-                .desired_width(ui.available_width().max(0.0))
-                .margin(egui::Margin::symmetric(8.0, 6.0)),
-        );
-        if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            submit = true;
-        }
-    });
+    let r = ui.add(
+        egui::TextEdit::singleline(query)
+            .hint_text(hint)
+            .desired_width(ui.available_width().max(0.0))
+            .margin(egui::Margin::symmetric(10.0, 7.0)),
+    );
+    if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        submit = true;
+    }
     submit
 }
 

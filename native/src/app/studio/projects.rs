@@ -1,284 +1,412 @@
-use std::collections::HashSet;
+//! The projects experience — a two-level launcher built on `tokito_ui`.
+//!
+//! [`ProjectsView::Home`] lists recent projects; clicking one enters
+//! [`ProjectsView::Designs`], that project's designs. A design opens the
+//! studio. Ported from the locked Figma design lock.
 
-use crate::app::{App, ProjectsSort};
-use crate::ui::{tokens::UiTokens, TypeRamp};
+use crate::app::{App, ProjectsSort, ProjectsView};
 use tokito::models::{CreateProject, Design, PatchDesign, PatchProject};
+use tokito_ui::components as c;
+use tokito_ui::{icons, Tokens};
+
+/// Max width of the centred content column.
+const COLUMN_MAX: f32 = 1040.0;
+/// Project / design card footprint.
+const CARD_H: f32 = 138.0;
+/// Gap between grid cards.
+const GRID_GAP: f32 = 16.0;
 
 impl App {
     pub(crate) fn ui_projects(&mut self, ctx: &egui::Context) {
-        let tokens = self.ui_tokens;
-        let ty = TypeRamp::default();
+        let theme = crate::theme::effective_theme(&self.settings_file.general.theme);
+        let t = Tokens::from_name(&theme);
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(tokens.bg_app))
+        // ---- top bar -------------------------------------------------------
+        egui::TopBottomPanel::top("projects_topbar")
+            .exact_height(50.0)
+            .frame(
+                egui::Frame::none()
+                    .fill(t.bg_chrome)
+                    .inner_margin(egui::Margin::symmetric(18.0, 0.0)),
+            )
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(12.0, 12.0);
+                ui.painter().hline(
+                    ui.max_rect().x_range(),
+                    ui.max_rect().bottom(),
+                    egui::Stroke::new(1.0, t.border_soft),
+                );
+                ui.horizontal_centered(|ui| {
+                    render_brand(ui, &t);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let glyph = if t.dark {
+                            icons::ph::SUN
+                        } else {
+                            icons::ph::MOON
+                        };
+                        if c::icon_button(ui, &t, glyph, 32.0).clicked() {
+                            self.toggle_theme(ctx);
+                        }
+                    });
+                });
+            });
+
+        // ---- content -------------------------------------------------------
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(t.bg))
+            .show(ctx, |ui| {
                 egui::ScrollArea::vertical()
-                    .id_salt("projects_page_scroll")
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.add_space(12.0);
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing = egui::vec2(12.0, 4.0);
-                            ui.label(ty.title("Tokito").color(tokens.text_primary));
-                            ui.label(
-                                ty.small_weak(
-                                    "Projects group designs. Pick a project, then open or create a schematic.",
-                                )
-                                .color(tokens.text_muted),
+                        let avail = ui.available_width();
+                        let pad = ((avail - COLUMN_MAX) / 2.0).max(28.0);
+                        let col_w = (avail - pad * 2.0).max(280.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(pad);
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(col_w, 0.0),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.add_space(34.0);
+                                    match self.projects_view {
+                                        ProjectsView::Home => {
+                                            self.render_projects_home(ui, &t, col_w)
+                                        }
+                                        ProjectsView::Designs => {
+                                            self.render_designs_view(ui, &t, col_w)
+                                        }
+                                    }
+                                    ui.add_space(60.0);
+                                },
                             );
                         });
-                        ui.add_space(10.0);
-
-                        let width = ui.available_width().max(0.0);
-                        ui.set_width(width);
-                        ui.set_max_width(width);
-
-                        if width >= 1120.0 {
-                            let gap = 12.0;
-                            let left_w = 280.0;
-                            let right_w = 260.0;
-                            let center_w = (width - left_w - right_w - gap * 2.0).max(0.0);
-                            ui.horizontal_top(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                ui.vertical(|ui| {
-                                    ui.set_width(left_w);
-                                    ui.set_max_width(left_w);
-                                    self.render_project_form_column(ui, &tokens, &ty);
-                                });
-                                ui.add_space(gap);
-                                ui.vertical(|ui| {
-                                    ui.set_width(center_w);
-                                    ui.set_max_width(center_w);
-                                    self.render_designs_panel(ui, &tokens, &ty);
-                                });
-                                ui.add_space(gap);
-                                ui.vertical(|ui| {
-                                    ui.set_width(right_w);
-                                    ui.set_max_width(right_w);
-                                    self.render_project_list_panel(ui, &tokens, &ty);
-                                });
-                            });
-                        } else if width >= 760.0 {
-                            let gap = 12.0;
-                            let left_w = (width * 0.34).clamp(230.0, 280.0);
-                            let center_w = (width - left_w - gap).max(0.0);
-                            ui.horizontal_top(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                ui.vertical(|ui| {
-                                    ui.set_width(left_w);
-                                    ui.set_max_width(left_w);
-                                    self.render_project_form_column(ui, &tokens, &ty);
-                                });
-                                ui.add_space(gap);
-                                ui.vertical(|ui| {
-                                    ui.set_width(center_w);
-                                    ui.set_max_width(center_w);
-                                    self.render_designs_panel(ui, &tokens, &ty);
-                                });
-                            });
-                            ui.add_space(12.0);
-                            self.render_project_list_panel(ui, &tokens, &ty);
-                        } else {
-                            self.render_project_form_column(ui, &tokens, &ty);
-                            ui.add_space(12.0);
-                            self.render_designs_panel(ui, &tokens, &ty);
-                            ui.add_space(12.0);
-                            self.render_project_list_panel(ui, &tokens, &ty);
-                        }
                     });
             });
-    }
 
-    fn render_project_form_column(&mut self, ui: &mut egui::Ui, tokens: &UiTokens, ty: &TypeRamp) {
-        self.render_new_project_card(ui, tokens, ty);
-        ui.add_space(12.0);
-        self.render_new_design_card(ui, tokens, ty);
-    }
-
-    fn render_new_project_card(&mut self, ui: &mut egui::Ui, tokens: &UiTokens, ty: &TypeRamp) {
-        crate::ui::layout::content_card(ui, tokens, |ui| {
-            ui.label(ty.section("Projects").color(tokens.text_primary));
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new("New project").small().weak());
-            ui.add(
-                egui::TextEdit::singleline(&mut self.new_project_name)
-                    .desired_width(ui.available_width().max(0.0)),
-            );
-            ui.checkbox(&mut self.new_project_embedded_db, "Isolated DB");
-            ui.label(
-                egui::RichText::new("Stores this project's data in its own local database.")
-                    .small()
-                    .weak()
-                    .color(tokens.text_muted),
-            );
-            ui.add_space(8.0);
-            if crate::ui::widgets::primary_button_full(ui, tokens, "Create project").clicked() {
-                let name = self.new_project_name.trim().to_string();
-                if name.is_empty() {
-                    self.set_err("Project name is required");
-                } else {
-                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        self.rt.block_on(async {
-                            tokito::store::projects::create(
-                                &self.global_pool,
-                                CreateProject { name },
-                            )
-                            .await
-                        })
-                    }));
-                    match res {
-                        Ok(Ok(p)) => {
-                            self.new_project_name.clear();
-                            if self.new_project_embedded_db {
-                                let ws = std::path::PathBuf::from(&p.workspace_path);
-                                let mut meta = tokito::project_toml::read(&ws).unwrap_or_default();
-                                meta.id = Some(p.id);
-                                meta.name = p.name.clone();
-                                meta.slug = p.slug.clone();
-                                meta.database.mode = "embedded".into();
-                                let _ = tokito::project_toml::write(&ws, &meta);
-                            }
-                            self.active_project_id = Some(p.id);
-                            self.projects_list_dirty = true;
-                            self.refresh_projects();
-                            self.reload_projects();
-                            self.toast_ok("Project created");
-                        }
-                        Ok(Err(e)) => self.set_err(e.to_string()),
-                        Err(_) => self.set_err("Project creation failed unexpectedly"),
-                    }
-                }
+        // Overlays: create-project / create-design modals.
+        if self.new_project_form_open {
+            let mut open = true;
+            c::modal(ctx, &t, &mut open, "New project", 420.0, |ui| {
+                self.new_project_modal_body(ui, &t);
+            });
+            if !open {
+                self.new_project_form_open = false;
             }
-        });
-    }
-
-    fn render_new_design_card(&mut self, ui: &mut egui::Ui, tokens: &UiTokens, ty: &TypeRamp) {
-        crate::ui::layout::content_card(ui, tokens, |ui| {
-            ui.label(ty.section("New design").color(tokens.text_primary));
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new("Name").small().weak());
-            ui.add(
-                egui::TextEdit::singleline(&mut self.new_design_name)
-                    .desired_width(ui.available_width().max(0.0)),
-            );
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new("Description").small().weak());
-            ui.add(
-                egui::TextEdit::singleline(&mut self.new_design_desc)
-                    .desired_width(ui.available_width().max(0.0)),
-            );
-            ui.add_space(12.0);
-            if crate::ui::widgets::primary_button_full(ui, tokens, "Create design").clicked() {
-                let name = self.new_design_name.trim().to_string();
-                if name.is_empty() {
-                    self.set_err("Name is required");
-                } else {
-                    let desc = self.new_design_desc.trim().to_string();
-                    let project_id = self.active_project_id;
-                    if let Some(pid) = project_id {
-                        self.connect_project_db_for_project(pid);
-                    }
-                    let res = self.rt.block_on(async {
-                        tokito::store::designs::create(
-                            &self.pool,
-                            tokito::models::CreateDesign {
-                                name,
-                                description: if desc.is_empty() { None } else { Some(desc) },
-                                project_id,
-                            },
-                            self.user_id,
-                        )
-                        .await
-                    });
-                    match res {
-                        Ok(d) => {
-                            self.new_design_name = "New design".to_string();
-                            self.new_design_desc.clear();
-                            self.open_design(d.id);
-                        }
-                        Err(e) => self.set_err(e),
-                    }
-                }
+        }
+        if self.new_design_form_open {
+            let mut open = true;
+            c::modal(ctx, &t, &mut open, "New design", 420.0, |ui| {
+                self.new_design_modal_body(ui, &t);
+            });
+            if !open {
+                self.new_design_form_open = false;
             }
-        });
+        }
+        // The ⌘K quick switcher is driven from `impl_eframe` (key handling +
+        // `show_projects_palette`), so it is not rendered again here.
     }
 
-    fn render_designs_panel(&mut self, ui: &mut egui::Ui, tokens: &UiTokens, ty: &TypeRamp) {
+    // =======================================================================
+    // Projects home
+    // =======================================================================
+
+    fn render_projects_home(&mut self, ui: &mut egui::Ui, t: &Tokens, col_w: f32) {
+        c::page_header(
+            ui,
+            t,
+            "Projects",
+            "Open a recent project, or create a new one.",
+        );
+        ui.add_space(28.0);
+
+        // 3-up grid: a new-project tile, then project cards.
+        let card_w = ((col_w - GRID_GAP * 2.0) / 3.0).floor();
+        let projects = self.projects.clone();
+        let mut enter: Option<uuid::Uuid> = None;
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(8.0, 4.0);
-            ui.label(ty.section("Your designs").color(tokens.text_primary));
-            if let Some(pid) = self.active_project_id {
-                if let Some(p) = self.projects.iter().find(|p| p.id == pid) {
-                    ui.label(
-                        egui::RichText::new(format!("in {}", p.name))
-                            .small()
-                            .weak()
-                            .color(tokens.text_muted),
-                    );
+            ui.spacing_mut().item_spacing = egui::vec2(GRID_GAP, GRID_GAP);
+
+            if c::new_tile(ui, t, "New project", None, egui::vec2(card_w, CARD_H)).clicked() {
+                self.new_project_form_open = true;
+                self.new_project_name.clear();
+            }
+
+            for p in &projects {
+                if project_card(ui, t, &p.name, &p.updated_at, card_w).clicked() {
+                    enter = Some(p.id);
                 }
             }
         });
-        ui.add_space(4.0);
 
-        if ui.available_width() < 520.0 {
-            let _ = crate::ui::layout::search_field(
-                ui,
-                &mut self.projects_search,
-                "Search name or description",
-            );
-            self.render_projects_sort_combo(ui);
-        } else {
-            ui.horizontal(|ui| {
-                let _ = crate::ui::layout::search_field(
-                    ui,
-                    &mut self.projects_search,
-                    "Search name or description",
-                );
-                self.render_projects_sort_combo(ui);
-            });
+        if let Some(pid) = enter {
+            self.active_project_id = Some(pid);
+            self.projects_view = ProjectsView::Designs;
+            self.projects_search.clear();
+            self.reload_projects();
+            ui.ctx().request_repaint();
         }
-        ui.add_space(8.0);
+    }
 
-        let rows = self.filtered_project_designs();
-        let pinned: Vec<_> = rows
-            .iter()
-            .filter(|d| self.projects_pinned.contains(&d.id))
-            .cloned()
-            .collect();
-        let recent_ids: HashSet<_> = self.recent_design_ids.iter().copied().collect();
-        let recent: Vec<_> = rows
-            .iter()
-            .filter(|d| recent_ids.contains(&d.id) && !self.projects_pinned.contains(&d.id))
-            .cloned()
-            .collect();
-        let mut seen = HashSet::new();
-        for d in &pinned {
-            seen.insert(d.id);
-        }
-        for d in &recent {
-            seen.insert(d.id);
-        }
-        let others: Vec<_> = rows.into_iter().filter(|d| !seen.contains(&d.id)).collect();
+    // =======================================================================
+    // Designs view (one project)
+    // =======================================================================
 
-        if pinned.is_empty() && recent.is_empty() && others.is_empty() && self.designs.is_empty() {
-            crate::ui::layout::empty_state(
-                ui,
-                tokens,
-                "No designs in this project. Create one on the left.",
-            );
+    fn render_designs_view(&mut self, ui: &mut egui::Ui, t: &Tokens, col_w: f32) {
+        // back to the projects launcher
+        let back = ui.add(
+            egui::Label::new(icons::icon_text(
+                icons::ph::ARROW_LEFT,
+                15.0,
+                "Projects",
+                13.0,
+                t.text_2,
+            ))
+            .sense(egui::Sense::click()),
+        );
+        if back.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if back.clicked() {
+            self.projects_view = ProjectsView::Home;
+            self.projects_list_dirty = true;
+            self.refresh_projects();
+            ui.ctx().request_repaint();
             return;
         }
+        ui.add_space(14.0);
 
-        self.render_design_section(ui, tokens, "Pinned", &pinned);
-        self.render_design_section(ui, tokens, "Recent", &recent);
-        self.render_design_section(ui, tokens, "All designs", &others);
+        let project_name = self
+            .active_project_id
+            .and_then(|pid| self.projects.iter().find(|p| p.id == pid))
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "Project".to_string());
+        let count = self.designs.len();
+        let sub = format!(
+            "{} design{}",
+            count,
+            if count == 1 { "" } else { "s" }
+        );
+        c::page_header(ui, t, &project_name, &sub);
+        ui.add_space(26.0);
+
+        // section header row: "Designs" + search + sort
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Designs")
+                    .text_style(egui::TextStyle::Name("h2".into()))
+                    .strong()
+                    .color(t.text),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.render_projects_sort_combo(ui);
+                ui.add_space(8.0);
+                let _ = c::search_field(
+                    ui,
+                    t,
+                    "designs_search",
+                    &mut self.projects_search,
+                    "Search designs",
+                    230.0,
+                );
+            });
+        });
+        ui.add_space(16.0);
+
+        let rows = self.filtered_project_designs();
+        let card_w = ((col_w - GRID_GAP * 2.0) / 3.0).floor();
+        let mut open: Option<uuid::Uuid> = None;
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(GRID_GAP, GRID_GAP);
+
+            if c::new_tile(
+                ui,
+                t,
+                "New design",
+                Some("blank · or AI-drafted"),
+                egui::vec2(card_w, CARD_H),
+            )
+            .clicked()
+            {
+                self.new_design_form_open = true;
+                if self.new_design_name.trim().is_empty() {
+                    self.new_design_name = "New design".to_string();
+                }
+            }
+
+            for d in &rows {
+                if design_card(ui, t, d, card_w).clicked() {
+                    open = Some(d.id);
+                }
+            }
+        });
+
+        if rows.is_empty() && self.designs.is_empty() && !self.new_design_form_open {
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new("No designs yet — create one above.")
+                    .size(13.0)
+                    .color(t.text_3),
+            );
+        }
+
+        if let Some(id) = open {
+            self.open_design(id);
+        }
+    }
+
+    // =======================================================================
+    // Inline forms
+    // =======================================================================
+
+    fn new_project_modal_body(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        let w = ui.available_width();
+        field_label(ui, t, "Name");
+        c::text_input(
+            ui,
+            t,
+            "new_project_name",
+            &mut self.new_project_name,
+            "Untitled project",
+            w,
+        );
+        ui.add_space(14.0);
+        c::toggle(ui, t, &mut self.new_project_embedded_db, "Isolated database");
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("Stores this project's data in its own local database.")
+                .size(12.0)
+                .color(t.text_3),
+        );
+        ui.add_space(18.0);
+        ui.horizontal(|ui| {
+            if c::text_button(ui, t, c::ButtonKind::Primary, "Create project", 34.0).clicked() {
+                self.create_project();
+                ui.ctx().request_repaint();
+            }
+            ui.add_space(8.0);
+            if c::text_button(ui, t, c::ButtonKind::Secondary, "Cancel", 34.0).clicked() {
+                self.new_project_form_open = false;
+            }
+        });
+    }
+
+    fn new_design_modal_body(&mut self, ui: &mut egui::Ui, t: &Tokens) {
+        let w = ui.available_width();
+        field_label(ui, t, "Name");
+        c::text_input(
+            ui,
+            t,
+            "new_design_name",
+            &mut self.new_design_name,
+            "New design",
+            w,
+        );
+        ui.add_space(12.0);
+        field_label(ui, t, "Description");
+        c::text_input(
+            ui,
+            t,
+            "new_design_desc",
+            &mut self.new_design_desc,
+            "Optional",
+            w,
+        );
+        ui.add_space(18.0);
+        ui.horizontal(|ui| {
+            if c::text_button(ui, t, c::ButtonKind::Primary, "Create design", 34.0).clicked() {
+                self.create_design();
+            }
+            ui.add_space(8.0);
+            if c::text_button(ui, t, c::ButtonKind::Secondary, "Cancel", 34.0).clicked() {
+                self.new_design_form_open = false;
+            }
+        });
+    }
+
+    // =======================================================================
+    // Data operations (UI-agnostic)
+    // =======================================================================
+
+    fn toggle_theme(&mut self, ctx: &egui::Context) {
+        let resolved = crate::theme::effective_theme(&self.settings_file.general.theme);
+        let next = if resolved == "dark" { "light" } else { "dark" };
+        self.settings_file.general.theme = next.to_string();
+        self.ui_tokens = crate::theme::tokens_for(next);
+        crate::theme::apply_with_theme(ctx, next);
+        let _ = tokito::settings::save_file(&self.settings_file);
+    }
+
+    fn create_project(&mut self) {
+        let name = self.new_project_name.trim().to_string();
+        if name.is_empty() {
+            self.set_err("Project name is required");
+            return;
+        }
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.rt.block_on(async {
+                tokito::store::projects::create(&self.global_pool, CreateProject { name }).await
+            })
+        }));
+        match res {
+            Ok(Ok(p)) => {
+                self.new_project_name.clear();
+                if self.new_project_embedded_db {
+                    let ws = std::path::PathBuf::from(&p.workspace_path);
+                    let mut meta = tokito::project_toml::read(&ws).unwrap_or_default();
+                    meta.id = Some(p.id);
+                    meta.name = p.name.clone();
+                    meta.slug = p.slug.clone();
+                    meta.database.mode = "embedded".into();
+                    let _ = tokito::project_toml::write(&ws, &meta);
+                }
+                self.active_project_id = Some(p.id);
+                self.projects_list_dirty = true;
+                self.new_project_form_open = false;
+                self.refresh_projects();
+                self.reload_projects();
+                self.toast_ok("Project created");
+            }
+            Ok(Err(e)) => self.set_err(e.to_string()),
+            Err(_) => self.set_err("Project creation failed unexpectedly"),
+        }
+    }
+
+    fn create_design(&mut self) {
+        let name = self.new_design_name.trim().to_string();
+        if name.is_empty() {
+            self.set_err("Design name is required");
+            return;
+        }
+        let desc = self.new_design_desc.trim().to_string();
+        let project_id = self.active_project_id;
+        if let Some(pid) = project_id {
+            self.connect_project_db_for_project(pid);
+        }
+        let res = self.rt.block_on(async {
+            tokito::store::designs::create(
+                &self.pool,
+                tokito::models::CreateDesign {
+                    name,
+                    description: if desc.is_empty() { None } else { Some(desc) },
+                    project_id,
+                },
+                self.user_id,
+            )
+            .await
+        });
+        match res {
+            Ok(d) => {
+                self.new_design_name = "New design".to_string();
+                self.new_design_desc.clear();
+                self.new_design_form_open = false;
+                self.open_design(d.id);
+            }
+            Err(e) => self.set_err(e),
+        }
     }
 
     fn render_projects_sort_combo(&mut self, ui: &mut egui::Ui) {
         egui::ComboBox::from_id_salt("projects_sort")
-            .width(ui.available_width().clamp(120.0, 160.0))
+            .width(150.0)
             .selected_text(match self.projects_sort {
                 ProjectsSort::UpdatedDesc => "Updated desc",
                 ProjectsSort::UpdatedAsc => "Updated asc",
@@ -316,7 +444,6 @@ impl App {
             })
             .cloned()
             .collect();
-
         match self.projects_sort {
             ProjectsSort::NameAsc => rows.sort_by(|a, b| a.name.cmp(&b.name)),
             ProjectsSort::NameDesc => rows.sort_by(|a, b| b.name.cmp(&a.name)),
@@ -324,293 +451,6 @@ impl App {
             ProjectsSort::UpdatedDesc => rows.sort_by_key(|r| std::cmp::Reverse(r.updated_at)),
         }
         rows
-    }
-
-    fn render_design_section(
-        &mut self,
-        ui: &mut egui::Ui,
-        tokens: &UiTokens,
-        title: &str,
-        designs: &[Design],
-    ) {
-        if designs.is_empty() {
-            return;
-        }
-        crate::ui::layout::subsection(ui, tokens, title);
-        for d in designs {
-            self.render_design_card(ui, tokens, d);
-            ui.add_space(8.0);
-        }
-    }
-
-    fn render_design_card(&mut self, ui: &mut egui::Ui, tokens: &UiTokens, d: &Design) {
-        crate::ui::layout::content_card(ui, tokens, |ui| {
-            if self.renaming_design_id == Some(d.id) {
-                self.render_design_rename_row(ui, tokens, d);
-                return;
-            }
-            let narrow = ui.available_width() < 540.0;
-            if narrow {
-                ui.horizontal_wrapped(|ui| {
-                    let mut pin = self.projects_pinned.contains(&d.id);
-                    if ui.checkbox(&mut pin, "Pinned").changed() {
-                        if pin {
-                            self.projects_pinned.insert(d.id);
-                        } else {
-                            self.projects_pinned.remove(&d.id);
-                        }
-                    }
-                });
-                ui.add_space(4.0);
-                self.render_design_card_text(ui, tokens, d);
-                ui.add_space(8.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                    if crate::ui::widgets::primary_button(ui, tokens, "Open").clicked() {
-                        self.open_design(d.id);
-                    }
-                    if crate::ui::widgets::secondary_button(ui, tokens, "Rename").clicked() {
-                        self.start_renaming_design(d);
-                    }
-                });
-            } else {
-                ui.horizontal(|ui| {
-                    let mut pin = self.projects_pinned.contains(&d.id);
-                    if ui.checkbox(&mut pin, "").changed() {
-                        if pin {
-                            self.projects_pinned.insert(d.id);
-                        } else {
-                            self.projects_pinned.remove(&d.id);
-                        }
-                    }
-                    ui.add_space(2.0);
-                    let text_w = (ui.available_width() - 224.0).max(120.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(text_w, 0.0),
-                        egui::Layout::top_down(egui::Align::Min),
-                        |ui| self.render_design_card_text(ui, tokens, d),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::ui::widgets::primary_button(ui, tokens, "Open").clicked() {
-                            self.open_design(d.id);
-                        }
-                        if crate::ui::widgets::secondary_button(ui, tokens, "Rename").clicked() {
-                            self.start_renaming_design(d);
-                        }
-                    });
-                });
-            }
-        });
-    }
-
-    fn start_renaming_design(&mut self, design: &Design) {
-        self.renaming_design_id = Some(design.id);
-        self.design_rename_name = design.name.clone();
-    }
-
-    fn render_design_rename_row(&mut self, ui: &mut egui::Ui, tokens: &UiTokens, d: &Design) {
-        ui.label(
-            egui::RichText::new("Rename design")
-                .strong()
-                .color(tokens.text_primary),
-        );
-        let resp = ui.add(
-            egui::TextEdit::singleline(&mut self.design_rename_name)
-                .desired_width(ui.available_width().max(0.0)),
-        );
-        let submit = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-            let save = crate::ui::widgets::primary_button(ui, tokens, "Save").clicked();
-            if save || submit {
-                self.rename_design_from_projects(d.id);
-            }
-            if crate::ui::widgets::secondary_button(ui, tokens, "Cancel").clicked() {
-                self.renaming_design_id = None;
-                self.design_rename_name.clear();
-            }
-        });
-    }
-
-    fn rename_design_from_projects(&mut self, design_id: uuid::Uuid) {
-        let name = self.design_rename_name.trim().to_string();
-        if name.is_empty() {
-            self.set_err("Design name is required");
-            return;
-        }
-        let res = self.rt.block_on(async {
-            tokito::store::designs::patch(
-                &self.pool,
-                design_id,
-                PatchDesign {
-                    name: Some(name),
-                    description: None,
-                    notes: None,
-                },
-            )
-            .await
-        });
-        match res {
-            Ok(row) => {
-                if let Some(existing) = self.designs.iter_mut().find(|d| d.id == design_id) {
-                    *existing = row.clone();
-                }
-                if self.design.as_ref().is_some_and(|d| d.id == design_id) {
-                    self.design = Some(row.clone());
-                    self.design_edit_name = row.name;
-                }
-                self.renaming_design_id = None;
-                self.design_rename_name.clear();
-                self.toast_ok("Design renamed");
-            }
-            Err(e) => self.set_err(e.to_string()),
-        }
-    }
-
-    fn render_design_card_text(&self, ui: &mut egui::Ui, tokens: &UiTokens, d: &Design) {
-        ui.label(egui::RichText::new(&d.name).strong().size(14.0));
-        if let Some(desc) = &d.description {
-            ui.label(
-                egui::RichText::new(crate::util::truncate_ui_chars(desc, 140))
-                    .weak()
-                    .small(),
-            );
-        }
-        let ts = d.updated_at.to_rfc3339();
-        let short = ts.get(..10).map(String::from).unwrap_or_else(|| ts.clone());
-        ui.label(
-            egui::RichText::new(format!("Updated {short}"))
-                .small()
-                .weak()
-                .color(tokens.text_muted),
-        );
-    }
-
-    fn render_project_list_panel(&mut self, ui: &mut egui::Ui, tokens: &UiTokens, ty: &TypeRamp) {
-        crate::ui::layout::content_card(ui, tokens, |ui| {
-            ui.label(ty.section("Project list").color(tokens.text_primary));
-            ui.add_space(6.0);
-            egui::ScrollArea::vertical()
-                .id_salt("project_list")
-                .max_height(360.0)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for p in self.projects.clone() {
-                        let active = self.active_project_id == Some(p.id);
-                        let max_chars = ((ui.available_width() / 7.5).floor() as usize)
-                            .saturating_sub(2)
-                            .clamp(8, 34);
-                        let label = crate::util::truncate_ui_chars(&p.name, max_chars);
-                        if ui
-                            .selectable_label(active, egui::RichText::new(label).size(13.0))
-                            .clicked()
-                        {
-                            self.active_project_id = Some(p.id);
-                            self.reload_projects();
-                        }
-                    }
-                });
-            ui.add_space(8.0);
-            if let Some(pid) = self.active_project_id {
-                if let Some(project) = self.projects.iter().find(|p| p.id == pid).cloned() {
-                    ui.separator();
-                    if self.renaming_project_id == Some(pid) {
-                        ui.label(
-                            egui::RichText::new("Rename project")
-                                .strong()
-                                .color(tokens.text_primary),
-                        );
-                        let resp = ui.add(
-                            egui::TextEdit::singleline(&mut self.project_rename_name)
-                                .desired_width(ui.available_width().max(0.0)),
-                        );
-                        let submit =
-                            resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                            let save =
-                                crate::ui::widgets::primary_button(ui, tokens, "Save").clicked();
-                            if save || submit {
-                                self.rename_active_project(pid);
-                            }
-                            if crate::ui::widgets::secondary_button(ui, tokens, "Cancel").clicked()
-                            {
-                                self.renaming_project_id = None;
-                                self.project_rename_name.clear();
-                            }
-                        });
-                    } else {
-                        ui.label(
-                            egui::RichText::new(crate::util::truncate_ui_chars(&project.name, 36))
-                                .strong()
-                                .color(tokens.text_primary),
-                        );
-                        if crate::ui::widgets::secondary_button(ui, tokens, "Rename project")
-                            .clicked()
-                        {
-                            self.renaming_project_id = Some(pid);
-                            self.project_rename_name = project.name;
-                        }
-                    }
-                    ui.add_space(8.0);
-                }
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                    if crate::ui::widgets::secondary_button(ui, tokens, "Export project zip")
-                        .clicked()
-                    {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name("project.zip")
-                            .save_file()
-                        {
-                            let uid = self.user_id;
-                            let db_url = self.db_url.clone();
-                            let pg_ver = self.settings_file.database.pg_embed_version;
-                            let res = self.rt.block_on(
-                                tokito::services::project_archive::export_project_zip(
-                                    &self.pool,
-                                    pid,
-                                    uid,
-                                    &path,
-                                    Some(&db_url),
-                                    pg_ver,
-                                ),
-                            );
-                            match res {
-                                Ok(()) => self.toast_ok("Project exported"),
-                                Err(e) => self.set_err(e.to_string()),
-                            }
-                        }
-                    }
-                    if crate::ui::widgets::secondary_button(ui, tokens, "Import project zip")
-                        .clicked()
-                    {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Zip", &["zip"])
-                            .pick_file()
-                        {
-                            let uid = self.user_id;
-                            let res = self.rt.block_on(
-                                tokito::services::project_archive::import_project_zip(
-                                    &self.global_pool,
-                                    &path,
-                                    uid,
-                                ),
-                            );
-                            match res {
-                                Ok(id) => {
-                                    self.active_project_id = Some(id);
-                                    self.refresh_projects();
-                                    self.reload_projects();
-                                    self.toast_ok("Project imported");
-                                }
-                                Err(e) => self.set_err(e.to_string()),
-                            }
-                        }
-                    }
-                });
-            }
-        });
     }
 
     fn rename_active_project(&mut self, project_id: uuid::Uuid) {
@@ -646,4 +486,199 @@ impl App {
             Err(e) => self.set_err(e.to_string()),
         }
     }
+
+    fn rename_design_from_projects(&mut self, design_id: uuid::Uuid) {
+        let name = self.design_rename_name.trim().to_string();
+        if name.is_empty() {
+            self.set_err("Design name is required");
+            return;
+        }
+        let res = self.rt.block_on(async {
+            tokito::store::designs::patch(
+                &self.pool,
+                design_id,
+                PatchDesign {
+                    name: Some(name),
+                    description: None,
+                    notes: None,
+                },
+            )
+            .await
+        });
+        match res {
+            Ok(row) => {
+                if let Some(existing) = self.designs.iter_mut().find(|d| d.id == design_id) {
+                    *existing = row.clone();
+                }
+                self.renaming_design_id = None;
+                self.design_rename_name.clear();
+                self.toast_ok("Design renamed");
+            }
+            Err(e) => self.set_err(e.to_string()),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn export_active_project_zip(&mut self, pid: uuid::Uuid) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_file_name("project.zip")
+            .save_file()
+        {
+            let uid = self.user_id;
+            let db_url = self.db_url.clone();
+            let pg_ver = self.settings_file.database.pg_embed_version;
+            let res = self.rt.block_on(tokito::services::project_archive::export_project_zip(
+                &self.pool,
+                pid,
+                uid,
+                &path,
+                Some(&db_url),
+                pg_ver,
+            ));
+            match res {
+                Ok(()) => self.toast_ok("Project exported"),
+                Err(e) => self.set_err(e.to_string()),
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn import_project_zip(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Zip", &["zip"])
+            .pick_file()
+        {
+            let uid = self.user_id;
+            let res = self.rt.block_on(tokito::services::project_archive::import_project_zip(
+                &self.global_pool,
+                &path,
+                uid,
+            ));
+            match res {
+                Ok(id) => {
+                    self.active_project_id = Some(id);
+                    self.refresh_projects();
+                    self.reload_projects();
+                    self.toast_ok("Project imported");
+                }
+                Err(e) => self.set_err(e.to_string()),
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// Free-function widgets (compose tokito_ui primitives into domain cards)
+// ===========================================================================
+
+fn render_brand(ui: &mut egui::Ui, t: &Tokens) {
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, egui::Rounding::same(7.0), t.accent);
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            icons::ph::CIRCUITRY,
+            icons::font(14.0),
+            t.accent_ink,
+        );
+        ui.add_space(9.0);
+        ui.label(
+            egui::RichText::new("Tokito")
+                .size(14.5)
+                .strong()
+                .color(t.text),
+        );
+    });
+}
+
+/// A small uppercase field label inside a form.
+fn field_label(ui: &mut egui::Ui, t: &Tokens, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .text_style(egui::TextStyle::Name("h3".into()))
+            .color(t.text_2),
+    );
+    ui.add_space(5.0);
+}
+
+/// A small rounded icon chip — the folder / schematic glyph on a card.
+fn icon_chip(ui: &mut egui::Ui, t: &Tokens, glyph: &str) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
+    ui.painter().rect_filled(rect, t.rounding_sm(), t.bg);
+    ui.painter().rect_stroke(
+        rect.shrink(0.5),
+        t.rounding_sm(),
+        egui::Stroke::new(1.0, t.border),
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        icons::font(16.0),
+        t.text_2,
+    );
+}
+
+/// Format a timestamp as a short `YYYY-MM-DD` date.
+fn short_date(ts: &impl ToString) -> String {
+    let s = ts.to_string();
+    s.get(..10).map(String::from).unwrap_or(s)
+}
+
+/// A project card: folder chip, name, updated date.
+fn project_card(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    name: &str,
+    updated_at: &impl ToString,
+    width: f32,
+) -> egui::Response {
+    c::card(ui, t, egui::vec2(width, CARD_H), |ui| {
+        ui.horizontal(|ui| {
+            icon_chip(ui, t, icons::ph::FOLDER);
+        });
+        ui.add_space(12.0);
+        ui.label(
+            egui::RichText::new(crate::util::truncate_ui_chars(name, 28))
+                .size(14.5)
+                .strong()
+                .color(t.text),
+        );
+        ui.add_space((ui.available_height() - 16.0).max(4.0));
+        ui.label(
+            icons::icon_text(
+                icons::ph::CLOCK,
+                13.0,
+                &short_date(updated_at),
+                12.0,
+                t.text_3,
+            ),
+        );
+    })
+}
+
+/// A design card: schematic chip, name, updated date.
+fn design_card(ui: &mut egui::Ui, t: &Tokens, d: &Design, width: f32) -> egui::Response {
+    c::card(ui, t, egui::vec2(width, CARD_H), |ui| {
+        ui.horizontal(|ui| {
+            icon_chip(ui, t, icons::ph::TREE_STRUCTURE);
+        });
+        ui.add_space(12.0);
+        ui.label(
+            egui::RichText::new(crate::util::truncate_ui_chars(&d.name, 28))
+                .size(14.5)
+                .strong()
+                .color(t.text),
+        );
+        ui.add_space((ui.available_height() - 16.0).max(4.0));
+        ui.label(icons::icon_text(
+            icons::ph::CLOCK,
+            13.0,
+            &short_date(&d.updated_at.to_rfc3339()),
+            12.0,
+            t.text_3,
+        ));
+    })
 }

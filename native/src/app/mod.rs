@@ -73,6 +73,16 @@ pub enum Route {
     Studio { design_id: Uuid },
 }
 
+/// Sub-view within [`Route::Projects`]: the projects launcher vs. one
+/// project's designs. See `projects.rs`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ProjectsView {
+    /// The launcher — recent projects.
+    Home,
+    /// One project's designs (the project is `active_project_id`).
+    Designs,
+}
+
 pub struct App {
     _embedded_db: tokito::db::EmbeddedPostgres,
     _project_embedded: Option<tokito::db::EmbeddedPostgres>,
@@ -152,6 +162,11 @@ pub struct App {
 
     command_palette_open: bool,
     command_palette_query: String,
+    /// Projects-screen quick switcher (⌘K) — jump to a project or design.
+    projects_palette_open: bool,
+    projects_palette_query: String,
+    /// Type-to-filter text inside the project dropdown menu.
+    project_menu_filter: String,
 
     /// Symbol import path typed in Place panel.
     symbol_import_path: String,
@@ -180,6 +195,9 @@ pub struct App {
     active_project_id: Option<Uuid>,
     new_project_name: String,
     new_project_embedded_db: bool,
+    new_design_form_open: bool,
+    new_project_form_open: bool,
+    projects_view: ProjectsView,
     renaming_project_id: Option<Uuid>,
     project_rename_name: String,
     renaming_design_id: Option<Uuid>,
@@ -275,6 +293,9 @@ impl App {
             ai_build_ready,
             command_palette_open: false,
             command_palette_query: String::new(),
+            projects_palette_open: false,
+            projects_palette_query: String::new(),
+            project_menu_filter: String::new(),
             symbol_import_path: String::new(),
             mcad_viewer: crate::mcad_viewer::McadViewer::default(),
             settings_file,
@@ -295,6 +316,9 @@ impl App {
             active_project_id: Some(tokito::store::projects::default_project_id()),
             new_project_name: String::new(),
             new_project_embedded_db: false,
+            new_design_form_open: false,
+            new_project_form_open: false,
+            projects_view: ProjectsView::Home,
             renaming_project_id: None,
             project_rename_name: String::new(),
             renaming_design_id: None,

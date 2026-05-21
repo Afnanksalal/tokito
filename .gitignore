@@ -58,3 +58,6 @@ web/node_modules/
 
 # Local tooling (Claude Code per-project state)
 .claude/
+
+# Scratch UI design mockup (not source)
+landing-mockup.html

@@ -3,6 +3,43 @@
 use crate::ui::tokens::UiTokens;
 use egui::{Pos2, Rect, RichText, Stroke, Ui, Vec2};
 
+/// A full-width, **left-aligned**, hover-highlighted clickable list row.
+///
+/// `egui`'s `SelectableLabel`/`Button` center their text, and `add_sized`
+/// centers the widget within its rect — both produce floating, centered labels
+/// that read as broken in a menu or list. This paints the row manually: a
+/// background fill on hover/selection and the `LayoutJob` galley pinned to the
+/// left edge.
+pub fn list_row(
+    ui: &mut Ui,
+    tokens: &UiTokens,
+    job: egui::text::LayoutJob,
+    selected: bool,
+) -> egui::Response {
+    let height = 32.0;
+    let (rect, resp) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    let bg = if selected {
+        tokens.bg_chip_selected
+    } else if resp.hovered() {
+        tokens.bg_hover
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    if bg != egui::Color32::TRANSPARENT {
+        ui.painter().rect_filled(rect, tokens.radius_sm, bg);
+    }
+    let galley = ui.fonts(|f| f.layout_job(job));
+    let pos = egui::pos2(
+        rect.left() + 10.0,
+        rect.center().y - galley.size().y / 2.0,
+    );
+    ui.painter().galley(pos, galley, tokens.text_primary);
+    resp
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolIcon {
     Select,
