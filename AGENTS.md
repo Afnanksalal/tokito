@@ -1,6 +1,6 @@
 # AGENTS.md
 
-**For AI coding assistants working in this repo.** Read this file at the start of every session before doing anything else, then read the memory files relevant to your task.
+**For AI coding assistants working in this repo.** Read this file at the start of every session before doing anything else, then read the memory files relevant to your task and check the project board (see [The board](#the-board)).
 
 This is not user-facing documentation — humans have `README.md`, `ROADMAP.md`, `CONTRIBUTING.md`, and `docs/`. This file plus the `memory/` folder are the AI's shared notebook: facts one of us learned that all of us should know. The repo is the sync mechanism — `git pull` gets you the team's latest knowledge, `git push` (or a PR) gives the team yours.
 
@@ -10,6 +10,28 @@ This is not user-facing documentation — humans have `README.md`, `ROADMAP.md`,
 
 - **`AGENTS.md`** (this file) — the *instructions*: how to read and maintain the notebook, plus the index below.
 - **`memory/`** — the *facts*: one Markdown file per topic. Project-shaped knowledge lives here, not inline in this file.
+
+## The board
+
+Active work — roadmap items, features, bugs, tasks — is tracked on the **GitHub Projects board**: <https://github.com/orgs/VtronTokito/projects/1>. Every card is a GitHub issue. This is the live "what are we doing and where does it stand" view; `ROADMAP.md` stays the human-facing horizon.
+
+Afnan and Joel both work from this board, and **the agents are responsible for keeping it honest** — a card's state should never lag the real state of the work. This is not optional housekeeping; it is how the two of us stay in sync.
+
+**At session start**, after reading this file, run `scripts/board.sh ls` to see what's in flight. If your task matches an existing card, work against it instead of starting an untracked thread.
+
+**As you work**, update the board in the same rhythm as your commits:
+
+| When | Command |
+|---|---|
+| Taking on work that has no card | `scripts/board.sh new "<title>" --type <bug\|feature\|task> --owner <Afnan\|Joel>` |
+| Starting work on a card | `scripts/board.sh move <issue#> "In progress"` |
+| Meaningful progress or a decision worth recording | `scripts/board.sh note <issue#> "<what changed>"` |
+| Work done, PR open | `scripts/board.sh move <issue#> "In review"` |
+| Merged / shipped | `scripts/board.sh done <issue#>` |
+
+Every update is attributed automatically to the GitHub account you are authenticated as — Joel is `kakarot-dev`, Afnan is his own account — so the *who* is recorded for free. Set the **Owner** field (`Afnan` / `Joel` / `Both`) to say who is driving a card.
+
+Full command reference, field definitions, raw `gh` fallbacks, and the one-time web setup live in [memory/board-workflow.md](memory/board-workflow.md).
 
 ## How to use the memory files
 
@@ -51,3 +73,4 @@ Memory edits go in their own commit unless they're part of a code change that ma
 | [memory/testing-and-ci.md](memory/testing-and-ci.md) | How to run tests, the single integration harness, snapshot tests, and the CI pipeline. |
 | [memory/docs-reference.md](memory/docs-reference.md) | Where the canonical human docs and scripts live. |
 | [memory/env-linux-wslg.md](memory/env-linux-wslg.md) | Env-specific — running the desktop binary on WSL2/WSLg. Ignore unless that's your setup. |
+| [memory/board-workflow.md](memory/board-workflow.md) | The GitHub Projects board — what it tracks, the `scripts/board.sh` commands agents update it with, and one-time web setup. |
