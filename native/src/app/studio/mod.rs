@@ -16,5 +16,6 @@ mod agent;
 mod projects;
 mod research;
 mod settings;
+pub use settings::SettingsSection;
 mod shortcuts;
 mod viewer3d;

@@ -31,8 +31,7 @@ impl App {
                 if crate::ui::widgets::secondary_button(ui, chrome.tokens, "Open Settings")
                     .clicked()
                 {
-                    use crate::app::studio_dock::{ensure_tab_visible, StudioTab};
-                    ensure_tab_visible(&mut self.dock_state, StudioTab::Settings);
+                    self.open_settings();
                 }
             });
             ui.add_space(12.0);

@@ -111,8 +111,7 @@ impl eframe::App for App {
                             });
                             if crate::ui::widgets::secondary_button(ui, &tokens, "Settings").clicked()
                             {
-                                use crate::app::studio_dock::{ensure_tab_visible, StudioTab};
-                                ensure_tab_visible(&mut self.dock_state, StudioTab::Settings);
+                                self.open_settings();
                             }
                             ui.menu_button("Panels", |ui| {
                                 use crate::app::studio_dock::{ensure_tab_visible, StudioTab};
@@ -230,6 +229,8 @@ impl eframe::App for App {
                 }
 
                 self.ui_studio(ctx, design_id);
+
+                self.show_settings_modal(ctx);
 
                 self.handle_studio_shortcuts(ctx);
             }

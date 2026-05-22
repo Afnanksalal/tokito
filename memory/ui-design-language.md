@@ -90,7 +90,7 @@ Researched 2026-05-19 (sources: egui 0.29.1 docs.rs `Ui` / `Layout`, github.com/
 
 **How to apply:**
 
-- Don't add UI controls that flip built-in defaults (ERC strict, bus tool, etc.) — those are intentional product-level constants, not user settings.
+- ERC strict mode, the bus tool, and auto-add-to-BOM are **user settings**, surfaced as checkboxes in the Settings dialog's *Editor* section (Tokito UI migration — board #26). The backend (`general.erc_strict_mode` / `enable_bus_tool` / `auto_add_placed_parts_to_bom` in `settings.toml`) persists them per-user; older studio chrome rendered them as fixed, display-only chips.
 - Respect the existing 52 px tool rail width and panel breakpoints when adding chrome; egui_dock panics on zero-width center nodes, so any new side panel needs to obey the `sides_budget` math.
 - New panels should plug into the dock via `studio_dock.rs` rather than spawning their own top-level windows.
 - When fixing layout bleed, reach for `add_sized` or `allocate_ui_with_layout(... with_cross_justify(true))`; do **not** add more `set_width`/`set_max_width` calls — they don't do what they look like they do.
