@@ -115,9 +115,7 @@ impl App {
                                             SettingsSection::Catalog => {
                                                 self.settings_catalog(ui, &t)
                                             }
-                                            SettingsSection::Editor => {
-                                                self.settings_editor(ui, &t)
-                                            }
+                                            SettingsSection::Editor => self.settings_editor(ui, &t),
                                             SettingsSection::Database => {
                                                 self.settings_database(ui, &t)
                                             }
@@ -561,12 +559,7 @@ impl App {
 /// A small bold heading above a group of fields ("Appearance", "Exports", …).
 fn group_label(ui: &mut egui::Ui, t: &Tokens, text: &str) {
     ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(text)
-            .strong()
-            .size(13.5)
-            .color(t.text),
-    );
+    ui.label(egui::RichText::new(text).strong().size(13.5).color(t.text));
     ui.add_space(2.0);
 }
 
