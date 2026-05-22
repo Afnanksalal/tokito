@@ -178,7 +178,8 @@ impl eframe::App for App {
                             ui,
                             &tk,
                             tokito_ui::icons::ph::GEAR,
-                            30.0,
+                            40.0,
+                            tk.accent,
                         )
                         .on_hover_text("Settings")
                         .clicked()
@@ -221,6 +222,7 @@ impl eframe::App for App {
                 }
                 self.ui_projects(ctx);
                 self.show_projects_palette(ctx);
+                self.show_settings_modal(ctx);
             }
             Route::Studio { design_id } => {
                 self.show_command_palette(ctx);

@@ -222,6 +222,9 @@ pub struct App {
     /// Edit buffers for the numeric DB fields (parsed back into `settings_file`).
     db_port_buf: String,
     db_pgver_buf: String,
+
+    /// Visible-design count per project, for the launcher cards.
+    project_design_counts: HashMap<Uuid, i64>,
 }
 
 impl App {
@@ -346,6 +349,7 @@ impl App {
             settings_dirty: false,
             db_port_buf: String::new(),
             db_pgver_buf: String::new(),
+            project_design_counts: HashMap::new(),
         };
         if settings_migrated {
             app.toasts.push(
@@ -533,6 +537,13 @@ impl App {
                 self.projects_list_dirty = false;
             }
             Err(e) => self.set_err(e.to_string()),
+        }
+        let user_id = self.user_id;
+        if let Ok(counts) = self.rt.block_on(tokito::store::designs::count_by_project(
+            &self.global_pool,
+            user_id,
+        )) {
+            self.project_design_counts = counts;
         }
     }
 

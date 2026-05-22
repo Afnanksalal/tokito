@@ -76,6 +76,26 @@ pub async fn list_for_project(
     .map_err(Into::into)
 }
 
+/// Visible-design count per project, for the launcher cards. Best-effort: a
+/// project that keeps its designs in its own embedded database is not counted.
+pub async fn count_by_project(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> AppResult<std::collections::HashMap<Uuid, i64>> {
+    let rows: Vec<(Uuid, i64)> = sqlx::query_as(
+        r#"
+        SELECT project_id, COUNT(*)::bigint
+        FROM designs
+        WHERE owner_user_id IS NULL OR owner_user_id = $1
+        GROUP BY project_id
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().collect())
+}
+
 pub async fn list_for_user(pool: &PgPool, user_id: Uuid, limit: i64) -> AppResult<Vec<Design>> {
     let lim = limit.clamp(1, 200);
     sqlx::query_as::<_, Design>(&format!(

@@ -38,16 +38,11 @@ impl App {
                 ui.horizontal_centered(|ui| {
                     render_brand(ui, &t);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let glyph = if t.dark {
-                            icons::ph::SUN
-                        } else {
-                            icons::ph::MOON
-                        };
-                        if c::icon_button(ui, &t, glyph, 32.0)
-                            .on_hover_text("Toggle theme")
+                        if c::icon_button(ui, &t, icons::ph::GEAR, 40.0, t.accent)
+                            .on_hover_text("Settings")
                             .clicked()
                         {
-                            self.toggle_theme(ctx);
+                            self.open_settings();
                         }
                     });
                 });
@@ -152,7 +147,8 @@ impl App {
             }
 
             for p in &projects {
-                let a = project_card(ui, t, &p.name, &p.updated_at, p.id, card_w);
+                let count = self.project_design_counts.get(&p.id).copied().unwrap_or(0);
+                let a = project_card(ui, t, &p.name, p.updated_at.timestamp(), count, card_w);
                 if !matches!(a, ProjectAction::None) {
                     act = Some((p.id, a));
                 }
@@ -756,9 +752,37 @@ fn icon_chip(ui: &mut egui::Ui, t: &Tokens, glyph: &str) {
 }
 
 /// Format a timestamp as a short `YYYY-MM-DD` date.
-fn short_date(ts: &impl ToString) -> String {
-    let s = ts.to_string();
-    s.get(..10).map(String::from).unwrap_or(s)
+/// A human "time ago" label — "Just now", "5 minutes ago", "Yesterday",
+/// "3 days ago", "2 weeks ago", … — from a Unix epoch (seconds).
+fn relative_time(epoch_secs: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(epoch_secs);
+    let s = (now - epoch_secs).max(0);
+    let plural = |n: i64| if n == 1 { "" } else { "s" };
+    if s < 60 {
+        "Just now".to_string()
+    } else if s < 3_600 {
+        let m = s / 60;
+        format!("{m} minute{} ago", plural(m))
+    } else if s < 86_400 {
+        let h = s / 3_600;
+        format!("{h} hour{} ago", plural(h))
+    } else if s < 172_800 {
+        "Yesterday".to_string()
+    } else if s < 604_800 {
+        format!("{} days ago", s / 86_400)
+    } else if s < 2_592_000 {
+        let w = s / 604_800;
+        format!("{w} week{} ago", plural(w))
+    } else if s < 31_536_000 {
+        let mo = s / 2_592_000;
+        format!("{mo} month{} ago", plural(mo))
+    } else {
+        let y = s / 31_536_000;
+        format!("{y} year{} ago", plural(y))
+    }
 }
 
 /// Which entity a rename modal is editing.
@@ -795,8 +819,8 @@ fn project_card(
     ui: &mut egui::Ui,
     t: &Tokens,
     name: &str,
-    updated_at: &impl ToString,
-    project_id: uuid::Uuid,
+    updated_epoch: i64,
+    design_count: i64,
     width: f32,
 ) -> ProjectAction {
     let mut action = ProjectAction::None;
@@ -806,20 +830,13 @@ fn project_card(
         ui.horizontal(|ui| {
             icon_chip(ui, t, icons::ph::FOLDER);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                c::menu_button(
-                    ui,
-                    t,
-                    ("project_kebab", project_id),
-                    icons::ph::DOTS_THREE_VERTICAL,
-                    26.0,
-                    |ui| {
-                        if c::menu_item(ui, t, icons::ph::PENCIL_SIMPLE, "Rename") {
-                            action = ProjectAction::Rename;
-                        }
-                        if c::menu_item(ui, t, icons::ph::DOWNLOAD_SIMPLE, "Export .zip") {
-                            action = ProjectAction::Export;
-                        }
-                    },
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{design_count} design{}",
+                        if design_count == 1 { "" } else { "s" }
+                    ))
+                    .size(12.0)
+                    .color(t.text_3),
                 );
             });
         });
@@ -834,10 +851,22 @@ fn project_card(
         ui.label(icons::icon_text(
             icons::ph::CLOCK,
             13.0,
-            &short_date(updated_at),
+            &relative_time(updated_epoch),
             12.0,
             t.text_3,
         ));
+    });
+    // Rename / Export live on a right-click menu so the card face matches the
+    // launcher design (folder, design count, name, age).
+    resp.context_menu(|ui| {
+        if c::menu_item(ui, t, icons::ph::PENCIL_SIMPLE, "Rename") {
+            action = ProjectAction::Rename;
+            ui.close_menu();
+        }
+        if c::menu_item(ui, t, icons::ph::DOWNLOAD_SIMPLE, "Export .zip") {
+            action = ProjectAction::Export;
+            ui.close_menu();
+        }
     });
     if resp.clicked() && matches!(action, ProjectAction::None) {
         action = ProjectAction::Enter;
@@ -893,7 +922,7 @@ fn design_card(
         ui.label(icons::icon_text(
             icons::ph::CLOCK,
             13.0,
-            &short_date(&d.updated_at.to_rfc3339()),
+            &relative_time(d.updated_at.timestamp()),
             12.0,
             t.text_3,
         ));
