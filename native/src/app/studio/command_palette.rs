@@ -246,7 +246,7 @@ impl App {
             }
             "panel_settings" => {
                 if matches!(self.route, Route::Studio { .. }) {
-                    ensure_tab_visible(&mut self.dock_state, StudioTab::Settings);
+                    self.open_settings();
                 }
             }
             "panel_agent" => {
@@ -303,7 +303,7 @@ const COMMAND_LIST: &[(&str, &str)] = &[
     ("panel_research", "Panel: Research"),
     ("panel_3d", "Panel: Board preview (MCAD)"),
     ("panel_console", "Panel: Console"),
-    ("panel_settings", "Panel: Settings"),
+    ("panel_settings", "Open Settings"),
     ("panel_agent", "Panel: Agent"),
     ("sync_bom", "Sync BOM from schematic"),
     ("export_bundle", "Export design bundle"),

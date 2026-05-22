@@ -109,11 +109,6 @@ impl eframe::App for App {
                                     ui.close_menu();
                                 }
                             });
-                            if crate::ui::widgets::secondary_button(ui, &tokens, "Settings").clicked()
-                            {
-                                use crate::app::studio_dock::{ensure_tab_visible, StudioTab};
-                                ensure_tab_visible(&mut self.dock_state, StudioTab::Settings);
-                            }
                             ui.menu_button("Panels", |ui| {
                                 use crate::app::studio_dock::{ensure_tab_visible, StudioTab};
                                 ui.set_min_width(220.0);
@@ -175,6 +170,22 @@ impl eframe::App for App {
                     }
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Settings gear — far top-right.
+                        let tk = tokito_ui::Tokens::from_name(&crate::theme::effective_theme(
+                            &self.settings_file.general.theme,
+                        ));
+                        if tokito_ui::components::icon_button(
+                            ui,
+                            &tk,
+                            tokito_ui::icons::ph::GEAR,
+                            40.0,
+                            tk.text,
+                        )
+                        .on_hover_text("Settings")
+                        .clicked()
+                        {
+                            self.open_settings();
+                        }
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 4.0;
                             if let Some(err) = &self.err {
@@ -211,6 +222,7 @@ impl eframe::App for App {
                 }
                 self.ui_projects(ctx);
                 self.show_projects_palette(ctx);
+                self.show_settings_modal(ctx);
             }
             Route::Studio { design_id } => {
                 self.show_command_palette(ctx);
@@ -230,6 +242,8 @@ impl eframe::App for App {
                 }
 
                 self.ui_studio(ctx, design_id);
+
+                self.show_settings_modal(ctx);
 
                 self.handle_studio_shortcuts(ctx);
             }

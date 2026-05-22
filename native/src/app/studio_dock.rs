@@ -16,12 +16,11 @@ pub enum StudioTab {
     Research,
     Viewer3d,
     Console,
-    Settings,
     Agent,
 }
 
 impl StudioTab {
-    pub const DOCK_TABS: [StudioTab; 10] = [
+    pub const DOCK_TABS: [StudioTab; 9] = [
         StudioTab::Canvas,
         StudioTab::Build,
         StudioTab::DesignManager,
@@ -30,12 +29,12 @@ impl StudioTab {
         StudioTab::Research,
         StudioTab::Viewer3d,
         StudioTab::Console,
-        StudioTab::Settings,
         StudioTab::Agent,
     ];
 
     /// Tabs the user can add from the dock “+” menu (Schematic stays singleton via non-closable root).
-    pub const ADDABLE_TABS: [StudioTab; 9] = [
+    /// Settings is not a dock tab — it is a modal dialog (`App::show_settings_modal`).
+    pub const ADDABLE_TABS: [StudioTab; 8] = [
         StudioTab::Build,
         StudioTab::DesignManager,
         StudioTab::Bom,
@@ -43,7 +42,6 @@ impl StudioTab {
         StudioTab::Research,
         StudioTab::Viewer3d,
         StudioTab::Console,
-        StudioTab::Settings,
         StudioTab::Agent,
     ];
 
@@ -57,7 +55,6 @@ impl StudioTab {
             StudioTab::Research => "Research",
             StudioTab::Viewer3d => "Preview",
             StudioTab::Console => "Console",
-            StudioTab::Settings => "Settings",
             StudioTab::Agent => "Agent",
         }
     }
@@ -113,7 +110,6 @@ impl TabViewer for AppDockViewer {
             StudioTab::Research => app.render_studio_research_tab(ui, self.design_id),
             StudioTab::Viewer3d => app.render_studio_viewer3d_tab(ui, &ctx),
             StudioTab::Console => app.render_studio_console_tab(ui),
-            StudioTab::Settings => app.render_studio_settings_tab(ui, &ctx),
             StudioTab::Agent => app.render_studio_agent_tab(ui, self.design_id),
         }
     }

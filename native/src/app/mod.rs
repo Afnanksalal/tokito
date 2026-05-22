@@ -213,6 +213,18 @@ pub struct App {
     agent_busy: bool,
     agent_last_message: String,
     agent_rx: Option<Receiver<Result<String, String>>>,
+
+    /// Settings modal (replaces the old Settings dock tab) — see `studio/settings.rs`.
+    show_settings: bool,
+    settings_section: studio::SettingsSection,
+    /// Set by a settings control on change; drives an auto-save this frame.
+    settings_dirty: bool,
+    /// Edit buffers for the numeric DB fields (parsed back into `settings_file`).
+    db_port_buf: String,
+    db_pgver_buf: String,
+
+    /// Visible-design count per project, for the launcher cards.
+    project_design_counts: HashMap<Uuid, i64>,
 }
 
 impl App {
@@ -332,6 +344,12 @@ impl App {
             agent_busy: false,
             agent_last_message: String::new(),
             agent_rx: None,
+            show_settings: false,
+            settings_section: studio::SettingsSection::default(),
+            settings_dirty: false,
+            db_port_buf: String::new(),
+            db_pgver_buf: String::new(),
+            project_design_counts: HashMap::new(),
         };
         if settings_migrated {
             app.toasts.push(
@@ -340,6 +358,13 @@ impl App {
             );
         }
         Ok(app)
+    }
+
+    /// Open the settings modal, syncing the numeric edit buffers from disk state.
+    pub(crate) fn open_settings(&mut self) {
+        self.db_port_buf = self.settings_file.database.embedded_port.to_string();
+        self.db_pgver_buf = self.settings_file.database.pg_embed_version.to_string();
+        self.show_settings = true;
     }
 
     pub(crate) fn autosave_design_info(&mut self, design_id: Uuid) {
@@ -512,6 +537,13 @@ impl App {
                 self.projects_list_dirty = false;
             }
             Err(e) => self.set_err(e.to_string()),
+        }
+        let user_id = self.user_id;
+        if let Ok(counts) = self.rt.block_on(tokito::store::designs::count_by_project(
+            &self.global_pool,
+            user_id,
+        )) {
+            self.project_design_counts = counts;
         }
     }
 
