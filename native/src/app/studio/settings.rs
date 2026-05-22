@@ -326,26 +326,7 @@ impl App {
     }
 
     fn settings_catalog(&mut self, ui: &mut egui::Ui, t: &Tokens) {
-        if self.settings_file.catalog.lcsc_anonymous_search {
-            c::banner(
-                ui,
-                t,
-                c::BannerKind::Success,
-                icons::ph::CHECK_CIRCLE,
-                "LCSC catalog ready",
-                "Anonymous search enabled",
-            );
-        } else {
-            c::banner(
-                ui,
-                t,
-                c::BannerKind::Info,
-                icons::ph::WARNING_CIRCLE,
-                "LCSC search off",
-                "Enable anonymous search to browse parts without an account",
-            );
-        }
-
+        ui.add_space(2.0);
         if c::checkbox(
             ui,
             t,
