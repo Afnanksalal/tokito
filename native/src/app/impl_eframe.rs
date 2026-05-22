@@ -179,7 +179,7 @@ impl eframe::App for App {
                             &tk,
                             tokito_ui::icons::ph::GEAR,
                             40.0,
-                            tk.accent,
+                            tk.text,
                         )
                         .on_hover_text("Settings")
                         .clicked()

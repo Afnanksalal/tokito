@@ -43,9 +43,9 @@ impl SettingsSection {
     }
 }
 
-const MODAL_W: f32 = 780.0;
+const MODAL_W_MAX: f32 = 780.0;
 const SIDEBAR_W: f32 = 176.0;
-const BODY_H: f32 = 432.0;
+const BODY_H_MAX: f32 = 430.0;
 const FIELD_W: f32 = 380.0;
 
 impl App {
@@ -60,8 +60,13 @@ impl App {
         let mut open = true;
         self.settings_dirty = false;
 
-        c::modal(ctx, &t, &mut open, "Settings", MODAL_W, |ui| {
-            self.render_settings_body(ui, t);
+        // Size the modal to the window so it always keeps a margin around it.
+        let screen = ctx.screen_rect();
+        let modal_w = (screen.width() - 200.0).clamp(440.0, MODAL_W_MAX);
+        let body_h = (screen.height() - 260.0).clamp(260.0, BODY_H_MAX);
+
+        c::modal(ctx, &t, &mut open, "Settings", modal_w, |ui| {
+            self.render_settings_body(ui, t, body_h);
         });
 
         // The modal clears `open` on Esc / backdrop / X; the Done button
@@ -75,14 +80,14 @@ impl App {
         }
     }
 
-    fn render_settings_body(&mut self, ui: &mut egui::Ui, t: Tokens) {
+    fn render_settings_body(&mut self, ui: &mut egui::Ui, t: Tokens, body_h: f32) {
         // Body: a fixed-height row of [sidebar | divider | scrolling content].
         ui.allocate_ui_with_layout(
-            egui::vec2(ui.available_width(), BODY_H),
+            egui::vec2(ui.available_width(), body_h),
             egui::Layout::left_to_right(egui::Align::Min),
             |ui| {
                 ui.allocate_ui_with_layout(
-                    egui::vec2(SIDEBAR_W, BODY_H),
+                    egui::vec2(SIDEBAR_W, body_h),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         ui.add_space(2.0);
@@ -97,7 +102,7 @@ impl App {
                 );
                 ui.separator();
                 ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), BODY_H),
+                    egui::vec2(ui.available_width(), body_h),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         egui::ScrollArea::vertical()

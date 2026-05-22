@@ -38,7 +38,7 @@ impl App {
                 ui.horizontal_centered(|ui| {
                     render_brand(ui, &t);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if c::icon_button(ui, &t, icons::ph::GEAR, 40.0, t.accent)
+                        if c::icon_button(ui, &t, icons::ph::GEAR, 40.0, t.text)
                             .on_hover_text("Settings")
                             .clicked()
                         {
